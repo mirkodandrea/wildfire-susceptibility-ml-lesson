@@ -17,6 +17,53 @@
 # sampled pixels unburned in that period.
 # The output is a relative susceptibility score, not a calibrated annual fire probability.
 
+# %% [markdown]
+# ## Colab setup
+#
+# Run this cell first when opening the notebook in Google Colab. It installs the
+# geospatial and machine-learning packages used in the lesson, then clones this
+# repository so `utils.py` and the `data/` directory are available in the runtime.
+
+# %%
+from pathlib import Path
+
+try:
+    import google.colab  # type: ignore[import-not-found]  # noqa: F401
+
+    IN_COLAB = True
+except ImportError:
+    IN_COLAB = False
+
+if IN_COLAB:
+    import os
+    import subprocess
+    import sys
+
+    repo_url = "https://github.com/mirkodandrea/wildfire-susceptibility-ml-lesson.git"
+    repo_dir = Path("/content/wildfire-susceptibility-ml-lesson")
+
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            "rasterio",
+            "scikit-learn",
+            "matplotlib",
+            "pandas",
+            "numpy",
+            "ipython",
+        ]
+    )
+
+    if not repo_dir.exists():
+        subprocess.check_call(["git", "clone", "--depth", "1", repo_url, str(repo_dir)])
+
+    os.chdir(repo_dir)
+    print(f"Working directory: {Path.cwd()}")
+
 # %%
 from pathlib import Path
 
