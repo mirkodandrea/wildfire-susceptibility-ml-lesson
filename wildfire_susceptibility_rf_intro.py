@@ -53,6 +53,7 @@ DATA_DIR = Path("data")
 FIRE_PATH = DATA_DIR / "aree_bruciate" / "incendi_1997_2022_7791.shp"
 
 RASTER_PATHS = {
+    "elevation": DATA_DIR / "dtm_liguria_2017_100m_3003.tif",
     "slope": DATA_DIR / "slope.tif",
     "aspect_eastness": DATA_DIR / "easting.tif",
     "aspect_northness": DATA_DIR / "northing.tif",
@@ -61,7 +62,7 @@ RASTER_PATHS = {
     "roads_distance": DATA_DIR / "roads_distance.tiff",
 }
 
-NUMERIC_FEATURES = ["slope", "aspect_eastness", "aspect_northness", "urban_distance", "roads_distance"]
+NUMERIC_FEATURES = ["elevation", "slope", "aspect_eastness", "aspect_northness", "urban_distance", "roads_distance"]
 FEATURES = [*NUMERIC_FEATURES, "vegetation"]
 
 VEGETATION_NAMES = {
@@ -182,7 +183,7 @@ print_section("Raster predictor summary", raster_summary_df)
 # %%
 fig, axes = plt.subplots(1, 3, figsize=(13, 4), constrained_layout=True)
 
-for ax, feature in zip(axes, ["slope", "vegetation", "urban_distance"]):
+for ax, feature in zip(axes, ["elevation", "slope", "urban_distance"]):
     image = ax.imshow(np.where(analysis_mask, raster_arrays[feature], np.nan), cmap="viridis")
     ax.set_title(feature.replace("_", " "), loc="left", fontweight="bold")
     ax.set_xticks([])
@@ -389,14 +390,16 @@ dataset_summary_df
 print_section("Dataset summary", dataset_summary_df)
 
 # %%
-year_sample_summary_df = (
-    all_df.groupby(["fire_year", "target_label"], observed=True)
+sample_summary_df = (
+    pd.concat([train_pool_df, test_df], ignore_index=True)
+    .groupby(["period", "target_name"], observed=True)
     .size()
     .unstack(fill_value=0)
     .rename_axis(columns=None)
     .reset_index()
 )
-year_sample_summary_df.head()
+sample_summary_df
+print_section("Pixel samples by period", sample_summary_df)
 
 
 # %% [markdown]
@@ -432,7 +435,7 @@ print_section("Top vegetation classes by sampled burned share", vegetation_summa
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
 
-for ax, feature in zip(axes, ["slope", "urban_distance"]):
+for ax, feature in zip(axes, ["elevation", "urban_distance"]):
     for target, label, color in [(0, "unburned", "#2563eb"), (1, "burned", "#dc2626")]:
         ax.hist(
             train_pool_df.loc[train_pool_df["target"] == target, feature],
@@ -640,22 +643,111 @@ fig.tight_layout()
 fig
 
 # %%
-score_bin = pd.qcut(test_scored_df["rf_score"], q=10, duplicates="drop")
+score_bin = pd.qcut(test_scores["score"], q=10, duplicates="drop")
 score_bin_df = (
-    test_scored_df.assign(score_bin=score_bin)
+    test_scores.assign(score_bin=score_bin)
     .groupby("score_bin", observed=True)
     .agg(
         rows=("target", "size"),
-        mean_score=("rf_score", "mean"),
+        mean_score=("score", "mean"),
         observed_presence_share=("target", "mean"),
     )
     .reset_index()
 )
 score_bin_df
+print_section("Observed burned share by score bin", score_bin_df)
 
 
 # %% [markdown]
-# ## 8. Thresholds are decisions
+# ## 8. Operational percentile thresholds
+#
+# For operational use, the score can be converted into susceptibility classes by
+# selecting score percentiles across the territory.
+#
+# This is often easier to explain to stakeholders than a raw model probability:
+# for example, "high susceptibility" can mean the top 25% of valid pixels by
+# Random Forest score.
+#
+# The percentile is a policy choice. A smaller high-susceptibility area is easier
+# to inspect or prioritize, but it will miss more burned pixels. The hold-out test
+# below quantifies this trade-off using 2016-2022 fires.
+
+# %%
+baseline_burned_share = test_scores["target"].mean()
+
+operational_threshold_df = pd.DataFrame(
+    [
+        {
+            "high_risk_territory_share": high_risk_share,
+            "score_percentile_threshold": 1 - high_risk_share,
+            "score_threshold": test_scores["score"].quantile(1 - high_risk_share),
+            "mapped_high_risk_share": float((test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share)).mean()),
+            "precision": precision_score(
+                y_test,
+                test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share),
+                zero_division=0,
+            ),
+            "recall": recall_score(
+                y_test,
+                test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share),
+                zero_division=0,
+            ),
+            "lift_vs_landscape": precision_score(
+                y_test,
+                test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share),
+                zero_division=0,
+            )
+            / baseline_burned_share,
+        }
+        for high_risk_share in [0.10, 0.25, 0.50]
+    ]
+)
+operational_threshold_df
+print_section("Operational percentile thresholds on hold-out period", operational_threshold_df)
+
+# %%
+medium_threshold = test_scores["score"].quantile(0.50)
+high_threshold = test_scores["score"].quantile(0.75)
+
+test_scores["susceptibility_class"] = pd.cut(
+    test_scores["score"],
+    bins=[-np.inf, medium_threshold, high_threshold, np.inf],
+    labels=["low", "medium", "high"],
+    include_lowest=True,
+)
+
+susceptibility_class_df = (
+    test_scores.groupby("susceptibility_class", observed=True)
+    .agg(
+        pixels=("target", "size"),
+        territory_share=("target", lambda values: len(values) / len(test_scores)),
+        mean_score=("score", "mean"),
+        burned_pixels=("target", "sum"),
+        observed_burned_share=("target", "mean"),
+    )
+    .reset_index()
+)
+susceptibility_class_df["captured_burned_share"] = susceptibility_class_df["burned_pixels"] / test_scores["target"].sum()
+susceptibility_class_df["lift_vs_landscape"] = susceptibility_class_df["observed_burned_share"] / baseline_burned_share
+susceptibility_class_df
+print_section("Low, medium, high susceptibility classes on hold-out period", susceptibility_class_df)
+
+# %%
+fig, ax = plt.subplots(figsize=(7, 4))
+class_plot_df = susceptibility_class_df.set_index("susceptibility_class").loc[["low", "medium", "high"]]
+ax.bar(class_plot_df.index, class_plot_df["captured_burned_share"], color=["#2563eb", "#f59e0b", "#dc2626"])
+ax.set_title("Burned pixels captured by susceptibility class", loc="left", fontweight="bold")
+ax.set_xlabel("Susceptibility class")
+ax.set_ylabel("Share of 2016-2022 burned pixels")
+ax.set_ylim(0, max(0.05, class_plot_df["captured_burned_share"].max() * 1.15))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+fig.tight_layout()
+fig
+
+
+# %% [markdown]
+# ## 9. Thresholds are decisions
 #
 # The Random Forest gives a score.
 # A threshold turns that score into a class label.
@@ -696,7 +788,7 @@ fig
 
 
 # %% [markdown]
-# ## 9. Validation design matters
+# ## 10. Validation design matters
 #
 # The validation split is random within the pre-2016 training pool, so it is
 # useful for tuning but still optimistic for spatial data.
@@ -707,7 +799,7 @@ fig
 
 
 # %% [markdown]
-# ## 10. MDA variable importance
+# ## 11. MDA variable importance
 #
 # MDA means Mean Decrease in Accuracy.
 # Here "accuracy" is the validation metric we care about: ROC AUC.
@@ -768,7 +860,7 @@ fig
 
 
 # %% [markdown]
-# ## 11. Refit and map susceptibility
+# ## 12. Refit and map susceptibility
 #
 # For a strict hold-out evaluation, the mapped model below is still fitted only
 # on the pre-2016 training pool with the selected hyperparameters.
@@ -829,13 +921,15 @@ fig
 
 
 # %% [markdown]
-# ## 12. Take-home messages
+# ## 13. Take-home messages
 #
 # - Raster predictors can be converted into a tabular supervised-learning problem.
 # - Burned polygons provide positives; sampled unburned pixels define the comparison group.
+# - Elevation, slope, aspect, vegetation, and accessibility distances are used as static predictors.
 # - Categorical raster classes can be made numeric with simple dummy variables.
 # - Use a random validation split inside the training period to tune hyperparameters.
 # - Keep the 2016-2022 hold-out years untouched until final evaluation.
+# - Percentile thresholds translate model scores into operational territory shares.
 # - Evaluate scores before choosing thresholds.
 # - MDA variable importance explains model behavior, not ecological causality.
 # - The susceptibility map is a model output and must be interpreted with the sampling and validation design in mind.
