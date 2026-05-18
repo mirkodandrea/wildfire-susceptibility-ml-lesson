@@ -933,3 +933,37 @@ fig
 # - Evaluate scores before choosing thresholds.
 # - MDA variable importance explains model behavior, not ecological causality.
 # - The susceptibility map is a model output and must be interpreted with the sampling and validation design in mind.
+
+
+# %% [markdown]
+# ## 14. Exercises
+#
+# 1. **Add temperature and rain predictors.**
+#    Extend `RASTER_PATHS`, `NUMERIC_FEATURES`, and `FEATURES` with the climate
+#    rasters in `data/`:
+#
+#    - `temperature_summer.tif`
+#    - `temperature_winter.tif`
+#    - `precipitation_summer.tif`
+#    - `precipitation_winter.tif`
+#
+#    Re-run the workflow and compare the baseline Random Forest with the
+#    climate-augmented Random Forest. Report at least ROC AUC, average precision,
+#    and Brier loss on the 2016-2022 hold-out period. Also inspect whether the
+#    climate variables appear important in the MDA table.
+#
+# 2. **Try another learning algorithm.**
+#    Replace or complement `RandomForestClassifier` with another classifier,
+#    such as `HistGradientBoostingClassifier`, `ExtraTreesClassifier`,
+#    `LogisticRegression`, or `KNeighborsClassifier`. Keep the same train,
+#    validation, and 2016-2022 hold-out splits so the comparison is fair.
+#    Compare validation metrics, hold-out metrics, and the shape of the score
+#    distributions.
+#
+# 3. **Use a geographical split.**
+#    Design a spatial validation strategy instead of the temporal hold-out. For
+#    example, split pixels by easting or northing, train on one part of Liguria,
+#    and test on the held-out part. Compare the result with the temporal split.
+#    Does the model still generalize when evaluated on places it did not see
+#    during fitting? Explain how the geographical split changes the scientific
+#    question being tested.
