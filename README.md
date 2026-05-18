@@ -1,6 +1,5 @@
 # Machine Learning for PhDs: Wildfire Susceptibility
 
-[![Build notebook](https://github.com/mirkodandrea/wildfire-susceptibility-ml-lesson/actions/workflows/build-notebook.yml/badge.svg)](https://github.com/mirkodandrea/wildfire-susceptibility-ml-lesson/actions/workflows/build-notebook.yml)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mirkodandrea/wildfire-susceptibility-ml-lesson/blob/main/wildfire_susceptibility_rf_intro.ipynb)
 
 Lesson material for a compact, end-to-end machine learning workflow using
@@ -19,9 +18,13 @@ susceptibility score.
   Jupytext/percent-format notebook.
 - `wildfire_susceptibility_rf_intro.ipynb` - generated notebook for Google Colab
   and notebook viewers.
+- `wildfire_susceptibility_rf_intro.html` - generated HTML version with executed
+  outputs.
 - `lesson_setup.py` - shared imports and Colab runtime setup for the lesson.
 - `utils.py` - helper functions for combining yearly fire masks and converting
   raster pixels into tabular samples.
+- `scripts/deploy_lesson.sh` - local publish script that rebuilds, executes,
+  exports, commits, and pushes the lesson outputs.
 - `data/` - prepared predictor rasters and yearly burned-area rasters.
 - `pyproject.toml` and `uv.lock` - Python environment definition.
 
@@ -83,6 +86,21 @@ Or execute the script-style notebook from the command line:
 
 ```bash
 uv run python wildfire_susceptibility_rf_intro.py
+```
+
+## Publishing
+
+To rebuild the notebook, execute it so outputs are stored, export HTML, commit,
+and push:
+
+```bash
+scripts/deploy_lesson.sh
+```
+
+You can pass a custom commit message:
+
+```bash
+scripts/deploy_lesson.sh "Update executed lesson outputs"
 ```
 
 ## Data
