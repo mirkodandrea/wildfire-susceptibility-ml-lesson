@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "wildfire_susceptibility_rf_intro.py"
+      - "lesson_setup.py"
       - ".github/workflows/build-notebook.yml"
   workflow_dispatch:
 

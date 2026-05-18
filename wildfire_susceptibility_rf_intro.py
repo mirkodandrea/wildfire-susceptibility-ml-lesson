@@ -18,85 +18,24 @@
 # The output is a relative susceptibility score, not a calibrated annual fire probability.
 
 # %% [markdown]
-# ## Colab setup
+# ## Setup
 #
-# Run this cell first when opening the notebook in Google Colab. It installs the
-# geospatial and machine-learning packages used in the lesson, then clones this
-# repository so `utils.py` and the `data/` directory are available in the runtime.
+# This cell loads the lesson setup script. In Colab, it first downloads the
+# script from GitHub; the script then installs dependencies and clones the
+# repository data into the runtime.
 
 # %%
 from pathlib import Path
+from urllib.request import urlretrieve
 
-try:
-    import google.colab  # type: ignore[import-not-found]  # noqa: F401
-
-    IN_COLAB = True
-except ImportError:
-    IN_COLAB = False
-
-if IN_COLAB:
-    import os
-    import subprocess
-    import sys
-
-    repo_url = "https://github.com/mirkodandrea/wildfire-susceptibility-ml-lesson.git"
-    repo_dir = Path("/content/wildfire-susceptibility-ml-lesson")
-
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "-q",
-            "rasterio",
-            "scikit-learn",
-            "matplotlib",
-            "pandas",
-            "numpy",
-            "ipython",
-        ]
+setup_path = Path("lesson_setup.py")
+if not setup_path.exists():
+    urlretrieve(
+        "https://raw.githubusercontent.com/mirkodandrea/wildfire-susceptibility-ml-lesson/main/lesson_setup.py",
+        setup_path,
     )
 
-    if not repo_dir.exists():
-        subprocess.check_call(["git", "clone", "--depth", "1", repo_url, str(repo_dir)])
-
-    os.chdir(repo_dir)
-    print(f"Working directory: {Path.cwd()}")
-
-# %%
-from pathlib import Path
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import rasterio
-from IPython.display import Markdown, display
-from matplotlib.colors import BoundaryNorm, ListedColormap
-from matplotlib.patches import Patch
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.inspection import permutation_importance
-from sklearn.metrics import (
-    ConfusionMatrixDisplay,
-    PrecisionRecallDisplay,
-    RocCurveDisplay,
-    average_precision_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
-from sklearn.model_selection import GridSearchCV, PredefinedSplit, train_test_split
-
-from utils import (
-    combined_fire_mask,
-    full_period_table,
-    pixel_frame,
-    sampled_period_table,
-)
-
-plt.style.use("seaborn-v0_8-whitegrid")
-pd.set_option("display.max_columns", 100)
-pd.set_option("display.width", 140)
+from lesson_setup import *  # noqa: F403
 
 RANDOM_STATE = 42
 HOLDOUT_START_YEAR = 2016

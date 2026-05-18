@@ -19,6 +19,7 @@ susceptibility score.
   Jupytext/percent-format notebook.
 - `wildfire_susceptibility_rf_intro.ipynb` - generated notebook for Google Colab
   and notebook viewers.
+- `lesson_setup.py` - shared imports and Colab runtime setup for the lesson.
 - `utils.py` - helper functions for combining yearly fire masks and converting
   raster pixels into tabular samples.
 - `data/` - prepared predictor rasters and yearly burned-area rasters.
