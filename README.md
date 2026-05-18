@@ -1,5 +1,8 @@
 # Machine Learning for PhDs: Wildfire Susceptibility
 
+[![Build notebook](https://github.com/mirkodandrea/wildfire-susceptibility-ml-lesson/actions/workflows/build-notebook.yml/badge.svg)](https://github.com/mirkodandrea/wildfire-susceptibility-ml-lesson/actions/workflows/build-notebook.yml)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mirkodandrea/wildfire-susceptibility-ml-lesson/blob/main/wildfire_susceptibility_rf_intro.ipynb)
+
 Lesson material for a compact, end-to-end machine learning workflow using
 environmental raster data. The main lesson builds a Random Forest baseline for
 wildfire susceptibility from static landscape predictors and yearly burned-area
@@ -14,6 +17,8 @@ susceptibility score.
 
 - `wildfire_susceptibility_rf_intro.py` - the main lesson, written as a
   Jupytext/percent-format notebook.
+- `wildfire_susceptibility_rf_intro.ipynb` - generated notebook for Google Colab
+  and notebook viewers.
 - `utils.py` - helper functions for combining yearly fire masks and converting
   raster pixels into tabular samples.
 - `data/` - prepared predictor rasters and yearly burned-area rasters.
