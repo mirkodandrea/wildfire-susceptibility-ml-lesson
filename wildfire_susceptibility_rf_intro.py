@@ -24,6 +24,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import rasterio
+from IPython.display import Markdown, display
+from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.patches import Patch
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
@@ -31,8 +34,6 @@ from sklearn.metrics import (
     PrecisionRecallDisplay,
     RocCurveDisplay,
     average_precision_score,
-    balanced_accuracy_score,
-    brier_score_loss,
     precision_score,
     recall_score,
     roc_auc_score,
@@ -43,7 +44,6 @@ from utils import (
     combined_fire_mask,
     full_period_table,
     pixel_frame,
-    print_section,
     sampled_period_table,
 )
 
@@ -71,19 +71,49 @@ NUMERIC_FEATURES = ["elevation", "slope", "aspect_eastness", "aspect_northness",
 FEATURES = [*NUMERIC_FEATURES, "vegetation"]
 
 VEGETATION_NAMES = {
-    3111: "Evergreen xeric forest",
-    3112: "Thermophilous mixed forest",
-    3113: "Mesophilous mixed forest",
+    # Mixed broadleaf forests
+    3112: "Warm-climate mixed forest",
+    3113: "Moist-climate mixed forest",
+    313: "Mixed forest",
+
+    # Dominant tree-species forests
     3114: "Beech forest",
     3115: "Chestnut forest",
-    3116: "Chestnut orchards",
-    3117: "Riparian forest",
-    312: "Conifer forest",
-    313: "Mixed forest",
+    3116: "Chestnut orchard",
+
+    # Evergreen and conifer forests
+    3111: "Evergreen dry forest",
+    312: "Coniferous forest",
+
+    # Water-associated vegetation
+    3117: "Riparian vegetation",
+
+    # Shrub and transitional vegetation
     322: "Shrubland and scrub",
-    323: "Sclerophyll vegetation",
+    323: "Mediterranean evergreen scrub",
     324: "Woodland-shrub transition",
 }
+
+VEGETATION_CODES = list(VEGETATION_NAMES)
+VEGETATION_COLORS = {
+    3112: "#5aae61",
+    3113: "#1b7837",
+    313: "#00441b",
+    3114: "#74c476",
+    3115: "#238b45",
+    3116: "#8c6d31",
+    3111: "#2b8c4b",
+    312: "#006d2c",
+    3117: "#2b8cbe",
+    322: "#d8b365",
+    323: "#b35806",
+    324: "#a6d96a",
+}
+VEGETATION_CMAP = ListedColormap([VEGETATION_COLORS[code] for code in VEGETATION_CODES])
+VEGETATION_NORM = BoundaryNorm(
+    np.arange(-0.5, len(VEGETATION_CODES) + 0.5),
+    VEGETATION_CMAP.N,
+)
 
 
 # %% [markdown]
@@ -94,22 +124,13 @@ VEGETATION_NAMES = {
 # burned and unburned pixels, then evaluate on a 2016-2022 hold-out period.
 # The model output is a ranking score: higher means "more similar to pixels that
 # burned in the training period".
-
-# %%
-problem_df = pd.DataFrame(
-    {
-        "choice": ["unit", "positive label", "negative label", "model output", "main caveat"],
-        "definition": [
-            "one valid 100 m pixel",
-            f"pixel centre in a burned raster cell for the evaluated period",
-            f"sampled valid pixel outside burned pixels for the evaluated period",
-            "relative susceptibility score",
-            "nearby pixels are not independent and predictors are static",
-        ],
-    }
-)
-problem_df
-print_section("Prediction problem", problem_df)
+#
+# - **Unit:** one valid 100 m pixel
+# - **Positive label:** pixel centre in a burned raster cell for the evaluated period
+# - **Negative label:** sampled unburned pixel for training; every valid unburned
+#   pixel for hold-out evaluation
+# - **Model output:** relative susceptibility score
+# - **Main caveat:** nearby pixels are not independent and predictors are static
 
 
 # %% [markdown]
@@ -172,8 +193,8 @@ for feature in NUMERIC_FEATURES:
     valid_mask &= np.isfinite(raster_arrays[feature])
 
 valid_pixel_count = int(valid_mask.sum())
-valid_pixel_count
-print_section("Valid analysis pixels", valid_pixel_count)
+display(Markdown("### Valid analysis pixels"))
+display(valid_pixel_count)
 
 # %%
 raster_summary_df = pd.DataFrame(
@@ -186,8 +207,8 @@ raster_summary_df = pd.DataFrame(
         for feature in NUMERIC_FEATURES
     ]
 )
-raster_summary_df
-print_section("Raster predictor summary", raster_summary_df)
+display(Markdown("### Raster predictor summary"))
+display(raster_summary_df)
 
 # %% [markdown]
 # ### Map all predictor rasters
@@ -198,22 +219,50 @@ print_section("Raster predictor summary", raster_summary_df)
 # continuous rasters.
 
 # %%
-fig, axes = plt.subplots(3, 3, figsize=(12, 10), constrained_layout=True)
-axes = axes.ravel()
+fig, axes = plt.subplots(len(NUMERIC_FEATURES), 1, figsize=(8, 3 * len(NUMERIC_FEATURES)), constrained_layout=True)
+axes = np.atleast_1d(axes)
 
-for ax, feature in zip(axes, FEATURES):
+for ax, feature in zip(axes, NUMERIC_FEATURES):
     feature_map = np.where(analysis_mask, raster_arrays[feature], np.nan)
-    cmap = "tab20" if feature == "vegetation" else "viridis"
-    image = ax.imshow(feature_map, extent=extent, origin="upper", cmap=cmap)
+    image = ax.imshow(feature_map, extent=extent, origin="upper", cmap="viridis")
+    fig.colorbar(image, ax=ax, fraction=0.04, pad=0.02)
     ax.set_title(feature.replace("_", " "), loc="left", fontweight="bold")
     ax.set_xticks([])
     ax.set_yticks([])
-    fig.colorbar(image, ax=ax, fraction=0.04, pad=0.02)
 
-for ax in axes[len(FEATURES) :]:
-    ax.axis("off")
+fig.suptitle("Continuous predictor rasters", x=0.01, ha="left", fontweight="bold")
+fig
 
-fig.suptitle("Predictor rasters", x=0.01, ha="left", fontweight="bold")
+# %%
+fig, ax = plt.subplots(figsize=(11, 4.5), constrained_layout=True)
+feature_map = np.where(analysis_mask, raster_arrays["vegetation"], np.nan)
+code_to_index = {code: index for index, code in enumerate(VEGETATION_CODES)}
+vegetation_map = np.full(feature_map.shape, np.nan, dtype=float)
+for code, index in code_to_index.items():
+    vegetation_map[feature_map == code] = index
+
+ax.imshow(
+    vegetation_map,
+    extent=extent,
+    origin="upper",
+    cmap=VEGETATION_CMAP,
+    norm=VEGETATION_NORM,
+)
+legend_handles = [
+    Patch(facecolor=VEGETATION_COLORS[code], edgecolor="none", label=VEGETATION_NAMES[code])
+    for code in VEGETATION_CODES
+    if np.any(feature_map == code)
+]
+ax.legend(
+    handles=legend_handles,
+    title="Vegetation class",
+    loc="center left",
+    bbox_to_anchor=(1.01, 0.5),
+    frameon=False,
+)
+ax.set_title("Vegetation", loc="left", fontweight="bold")
+ax.set_xticks([])
+ax.set_yticks([])
 fig
 
 
@@ -257,8 +306,8 @@ fire_summary_df = pd.DataFrame(
         for year, mask in fire_masks.items()
     ]
 )
-fire_summary_df.head()
-print_section("Burned-area summary by year", fire_summary_df)
+display(Markdown("### Burned-area summary by year"))
+display(fire_summary_df)
 
 # %%
 fig, ax = plt.subplots(figsize=(10, 4))
@@ -346,7 +395,7 @@ test_burned_mask = combined_fire_mask(fire_masks, test_years)
 # 2022. These maps show the spatial target pattern before any model is fitted.
 
 # %%
-fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), constrained_layout=True)
+fig, axes = plt.subplots(2, 1, figsize=(8, 8), constrained_layout=True)
 
 for ax, period_name, label_mask in [
     (axes[0], f"{min(train_years)}-{max(train_years)} training labels", train_burned_mask),
@@ -395,8 +444,8 @@ train_model_df, validation_df = train_test_split(
     stratify=train_pool_df["target"],
 )
 
-train_pool_df.head()
-print_section("Training-pool sample", train_pool_df.head())
+display(Markdown("### Training-pool sample"))
+display(train_pool_df.head())
 
 # %%
 dataset_summary_df = pd.DataFrame(
@@ -435,8 +484,8 @@ dataset_summary_df = pd.DataFrame(
         },
     ]
 )
-dataset_summary_df
-print_section("Dataset summary", dataset_summary_df)
+display(Markdown("### Dataset summary"))
+display(dataset_summary_df)
 
 # %%
 sample_summary_df = (
@@ -447,8 +496,8 @@ sample_summary_df = (
     .rename_axis(columns=None)
     .reset_index()
 )
-sample_summary_df
-print_section("Pixel samples by period", sample_summary_df)
+display(Markdown("### Pixel samples by period"))
+display(sample_summary_df)
 
 
 # %% [markdown]
@@ -464,8 +513,8 @@ class_summary_df = (
     .T.rename_axis("feature")
     .reset_index()
 )
-class_summary_df
-print_section("Class-wise median numeric predictors", class_summary_df)
+display(Markdown("### Class-wise median numeric predictors"))
+display(class_summary_df)
 
 # %%
 vegetation_summary_df = (
@@ -478,16 +527,20 @@ vegetation_summary_df = (
     .sort_values("burned", ascending=False)
     .head(8)
 )
-vegetation_summary_df
-print_section("Top vegetation classes by sampled burned share", vegetation_summary_df)
+display(Markdown("### Top vegetation classes by sampled burned share"))
+display(vegetation_summary_df)
 
 # %% [markdown]
-# ### Compare all numeric features by sampled class
+# ### Compare all predictors by sampled class
 #
-# These histograms use the balanced pre-2016 training pool. Blue is the sampled
-# pseudo-absence class; red is the burned class. Strong separation suggests a
-# feature may help rank susceptibility, while heavy overlap means the model will
-# need combinations of variables rather than a single threshold.
+# These plots use the balanced pre-2016 training pool. Blue is the sampled
+# pseudo-absence class; red is the burned class.
+#
+# Numeric predictors are shown as density histograms. Vegetation is categorical,
+# so it is shown as class percentages within burned and unburned samples.
+# Strong separation suggests a feature may help rank susceptibility, while heavy
+# overlap means the model will need combinations of variables rather than a
+# single threshold.
 
 # %%
 fig, axes = plt.subplots(2, 3, figsize=(13, 7), constrained_layout=True)
@@ -511,6 +564,61 @@ for ax, feature in zip(axes, NUMERIC_FEATURES):
 axes[0].legend(frameon=False)
 fig.suptitle("Sampled numeric predictor distributions", x=0.01, ha="left", fontweight="bold")
 fig
+
+# %%
+vegetation_plot_df = (
+    pd.crosstab(
+        train_pool_df["vegetation"].map(VEGETATION_NAMES).fillna(train_pool_df["vegetation"].astype(str)),
+        train_pool_df["target_name"],
+    )
+    .reindex(columns=["unburned", "burned"], fill_value=0)
+    .assign(total=lambda frame: frame.sum(axis=1))
+    .sort_values("total", ascending=True)
+)
+vegetation_count_plot_df = vegetation_plot_df[["unburned", "burned"]]
+
+fig, ax = plt.subplots(figsize=(10, 5.5))
+vegetation_count_plot_df.plot.barh(stacked=True, ax=ax, color=["#2563eb", "#dc2626"])
+ax.set_title("Sampled vegetation class composition", loc="left", fontweight="bold")
+ax.set_xlabel("Sampled pixels")
+ax.set_ylabel("")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+ax.legend(title="", frameon=False)
+fig.tight_layout()
+fig
+
+# %%
+numeric_contrast_df = (
+    train_pool_df.groupby("target_name", observed=True)[NUMERIC_FEATURES]
+    .median()
+    .T.rename(columns={"burned": "burned_median", "unburned": "unburned_median"})
+)
+numeric_contrast_df["burned_minus_unburned"] = (
+    numeric_contrast_df["burned_median"] - numeric_contrast_df["unburned_median"]
+)
+numeric_contrast_df = numeric_contrast_df.reset_index(names="feature")
+
+vegetation_contrast_df = vegetation_count_plot_df.reset_index(names="vegetation_class")
+vegetation_contrast_df["burned_minus_unburned_pixels"] = (
+    vegetation_contrast_df["burned"] - vegetation_contrast_df["unburned"]
+)
+
+display(Markdown("### Numeric predictor median contrasts"))
+display(numeric_contrast_df)
+display(Markdown("### Vegetation class count contrasts"))
+display(vegetation_contrast_df)
+
+# %% [markdown]
+# In the bundled data, pre-2016 burned samples are typically lower, steeper, and
+# more south-facing than the sampled unburned comparison pixels. The largest
+# vegetation contrasts are also plausible for a Ligurian wildfire example:
+# Mediterranean evergreen scrub and shrubland are over-represented among burned
+# samples, while chestnut and moist-climate mixed forest are under-represented.
+#
+# These summaries are descriptive, not causal. They are computed from the same
+# balanced sampling design used for fitting, so they describe the modelling
+# contrast rather than the true landscape prevalence of each class.
 
 
 # %% [markdown]
@@ -597,16 +705,25 @@ tuning_results_df = (
     ]
     .reset_index(drop=True)
 )
-tuning_results_df.head()
-print_section("Top tuning results", tuning_results_df.head(10))
+display(Markdown("### Top tuning results"))
+display(tuning_results_df.head(10))
 
 # %%
 best_params = tuning_search.best_params_
-best_params
-print_section("Selected hyperparameters", best_params)
+display(Markdown("### Selected hyperparameters"))
+display(best_params)
 
 # %%
-validation_model = tuning_search.best_estimator_
+# For an honest validation estimate, fit the selected configuration only on
+# the model-training split. GridSearchCV's refit estimator has seen the
+# validation rows and is therefore only useful as a convenience object, not as a
+# validation-reporting model.
+validation_model = RandomForestClassifier(
+    **best_params,
+    random_state=RANDOM_STATE,
+    n_jobs=-1,
+)
+validation_model.fit(X_train, y_train)
 
 # After choosing hyperparameters, refit on all pre-2016 training-pool samples.
 # The 2016-2022 hold-out set remains untouched until evaluation.
@@ -621,52 +738,168 @@ rf_model = RandomForestClassifier(
 )
 rf_model.fit(X_train_pool, y_train_pool)
 
-rf_model
-print_section("Fitted Random Forest", rf_model)
+display(Markdown("### Fitted Random Forest"))
+display(rf_model)
 
 
 # %% [markdown]
-# ## 7. Evaluate probability scores
+# ## 7. Evaluate susceptibility scores
 #
 # Susceptibility is usually used as a ranking.
-# The key evaluation question is:
+# The key hold-out evaluation question is:
 #
-# **Do 2016-2022 burned pixels receive higher scores than sampled 2016-2022
+# **Do 2016-2022 burned pixels receive higher scores than all valid 2016-2022
 # unburned pixels?**
 #
-# ROC AUC and average precision evaluate ranking.
-# Brier loss checks the numeric quality of the score as a probability-like value.
+# The validation split and the hold-out set should not be read as the same kind
+# of test. Validation is a balanced sample from the pre-2016 training period,
+# used to choose hyperparameters. The hold-out set is the full valid landscape
+# in 2016-2022, so it keeps the real rare-event class imbalance.
+#
+# For that reason, validation and hold-out metrics are reported in separate
+# tables. PR-AUC, precision, and top-percentile recall depend strongly on the
+# evaluation population and should not be compared directly between the balanced
+# validation sample and the imbalanced hold-out landscape.
 
 # %%
+TOP_RECALL_SHARES = [0.10, 0.25, 0.50]
+
+
 def fire_score(model, X):
     # predict_proba returns one column per class; select the probability of class 1.
     return model.predict_proba(X)[:, list(model.classes_).index(1)]
 
 
-def score_metrics(split, name, model, X, y):
-    score = fire_score(model, X)
+def recall_at_top_percent(y_true, score, top_share):
+    """Share of burned pixels captured inside the highest-scoring map fraction."""
+    y_true = np.asarray(y_true)
+    score = np.asarray(score)
 
-    # The 0.5 label is only a reporting threshold.
-    # Ranking metrics such as ROC AUC use the full continuous score.
-    label = score >= 0.5
+    if not 0 < top_share <= 1:
+        raise ValueError("top_share must be in the interval (0, 1].")
+
+    # Top-percentile recall answers the operational question directly:
+    # if only this share of the territory can be prioritized, how many observed
+    # fires would it have included? Ties at the cutoff can make the mapped share
+    # slightly larger than the requested share, which is preferable to silently
+    # dropping equally scored pixels.
+    threshold = np.quantile(score, 1 - top_share)
+    return recall_score(y_true, score >= threshold, zero_division=0)
+
+
+def boyce_index(y_true, score, n_bins=10):
+    """Continuous Boyce Index from presence/background score bins.
+
+    Positive values mean observed burned pixels are concentrated in higher
+    score bins. Values near zero mean the ranking is close to random, and
+    negative values mean burned pixels are concentrated in lower score bins.
+    """
+    y_true = np.asarray(y_true)
+    score = np.asarray(score)
+
+    presence_score = score[y_true == 1]
+    if presence_score.size == 0 or np.unique(score).size < 2:
+        return np.nan
+
+    # Quantile bins keep background counts reasonably even across skewed Random
+    # Forest scores. Duplicate edges are dropped because tree ensembles often
+    # assign identical probabilities to many pixels.
+    bin_edges = np.unique(np.quantile(score, np.linspace(0, 1, n_bins + 1)))
+    if bin_edges.size < 3:
+        return np.nan
+
+    bin_edges[0] = -np.inf
+    bin_edges[-1] = np.inf
+
+    background_counts, _ = np.histogram(score, bins=bin_edges)
+    presence_counts, _ = np.histogram(presence_score, bins=bin_edges)
+    valid_bins = (background_counts > 0) & (presence_counts > 0)
+    if valid_bins.sum() < 2:
+        return np.nan
+
+    expected = background_counts[valid_bins] / background_counts.sum()
+    observed = presence_counts[valid_bins] / presence_counts.sum()
+    predicted_expected_ratio = observed / expected
+
+    # Boyce is the Spearman correlation between bin suitability and the
+    # presence-to-expected ratio, so it only trusts monotonic ordering, not
+    # absolute probability calibration.
+    bin_id = np.digitize(score, bin_edges[1:-1], right=True)
+    mean_score_by_bin = np.array(
+        [score[bin_id == i].mean() for i in range(len(bin_edges) - 1)]
+    )[valid_bins]
+    return pd.Series(mean_score_by_bin).corr(pd.Series(predicted_expected_ratio), method="spearman")
+
+
+def validation_score_metrics(name, model, X, y):
+    score = fire_score(model, X)
     return {
-        "split": split,
         "model": name,
-        "roc_auc": roc_auc_score(y, score),
-        "average_precision": average_precision_score(y, score),
-        "brier_loss": brier_score_loss(y, score),
-        "balanced_accuracy_at_0_50": balanced_accuracy_score(y, label),
+        "evaluation_population": "balanced pre-2016 validation sample",
+        "rows": len(y),
+        "burned_share": float(np.mean(y)),
+        "ROC-AUC": roc_auc_score(y, score),
+        "PR-AUC": average_precision_score(y, score),
     }
 
 
-metrics_df = pd.DataFrame(
-    [
-        score_metrics("validation", "tuned random forest", validation_model, X_valid, y_valid),
-        score_metrics("2016-2022 hold-out", "tuned random forest", rf_model, X_test, y_test),
-    ]
-).set_index(["split", "model"])
-metrics_df
-print_section("Validation and hold-out metrics", metrics_df)
+def holdout_landscape_metrics(name, model, X, y):
+    score = fire_score(model, X)
+    metrics = {
+        "model": name,
+        "evaluation_population": "full 2016-2022 valid landscape",
+        "rows": len(y),
+        "burned_share": float(np.mean(y)),
+        "ROC-AUC": roc_auc_score(y, score),
+        "PR-AUC": average_precision_score(y, score),
+        "Boyce Index": boyce_index(y, score),
+    }
+    metrics.update(
+        {
+            f"Recall@Top {int(top_share * 100)}%": recall_at_top_percent(y, score, top_share)
+            for top_share in TOP_RECALL_SHARES
+        }
+    )
+    return metrics
+
+
+validation_metrics_df = pd.DataFrame(
+    [validation_score_metrics("tuned random forest", validation_model, X_valid, y_valid)]
+).set_index("model")
+display(Markdown("### Balanced validation tuning diagnostics"))
+display(validation_metrics_df)
+
+# %%
+holdout_metrics_df = pd.DataFrame(
+    [holdout_landscape_metrics("tuned random forest", rf_model, X_test, y_test)]
+).set_index("model")
+display(Markdown("### Full-landscape hold-out metrics"))
+display(holdout_metrics_df)
+
+# %% [markdown]
+# The validation table answers a narrow modelling question: after tuning, does
+# the selected Random Forest rank burned pixels above sampled pseudo-absences in
+# the balanced pre-2016 validation split? It is useful for model selection, but
+# it is not an estimate of landscape performance.
+#
+# The hold-out table answers the application question on the full 2016-2022
+# landscape. On the bundled data the hold-out ROC-AUC is about 0.80, meaning
+# later burned pixels usually rank above later unburned pixels.
+#
+# PR-AUC is reported only within its own evaluation population. The hold-out
+# PR-AUC is low in absolute terms because only about 1.5% of valid hold-out
+# pixels burned. That does not contradict the ROC-AUC result; it reflects the
+# rare-event base rate.
+#
+# Recall@Top% is the most directly operational metric here. In the hold-out
+# period, the top 10% of scored territory captures about half of the observed
+# burned pixels, and the top 25% captures about 70%. This is a useful ranking
+# signal, but it is not a calibrated annual probability.
+#
+# The Boyce Index is a monotonic bin diagnostic, so it can saturate when each
+# successive score bin has a higher burned-pixel concentration. Treat it as
+# supporting evidence for the ranking, not as a replacement for PR-AUC or the
+# top-percentile recall values.
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), constrained_layout=True)
@@ -712,15 +945,29 @@ score_bin_df = (
     )
     .reset_index()
 )
-score_bin_df
-print_section("Observed burned share by score bin", score_bin_df)
+score_bin_df["lift_vs_landscape"] = score_bin_df["observed_presence_share"] / test_scores["target"].mean()
+display(Markdown("### Observed burned share by score bin"))
+display(score_bin_df)
+
+# %% [markdown]
+# The score bins show why the model should be read as a ranking. The observed
+# burned share rises from well below the landscape base rate in the lowest score
+# bin to several times the base rate in the highest score bin. The top bin is
+# still mostly unburned pixels, because fire is rare even in susceptible areas.
 
 
 # %% [markdown]
-# ## 8. Operational percentile thresholds
+# ## 8. Thresholds are decisions
 #
-# For operational use, the score can be converted into susceptibility classes by
-# selecting score percentiles across the territory.
+# The Random Forest gives a score. Any threshold turns that score into a class
+# label, but there is no universal wildfire threshold. The choice depends on the
+# cost of missing susceptible areas versus over-flagging lower-susceptibility
+# areas.
+#
+# Percentile thresholds are a practical way to avoid pretending that one raw
+# score cutoff, such as 0.5, has a universal meaning. Instead of saying "score
+# above 0.5 is high risk", define high susceptibility as a territory share: for
+# example, the top 10%, 25%, or 50% of valid pixels by model score.
 #
 # This is often easier to explain to stakeholders than a raw model probability:
 # for example, "high susceptibility" can mean the top 25% of valid pixels by
@@ -733,35 +980,34 @@ print_section("Observed burned share by score bin", score_bin_df)
 # %%
 baseline_burned_share = test_scores["target"].mean()
 
-operational_threshold_df = pd.DataFrame(
-    [
+operational_threshold_rows = []
+for high_risk_share in [0.10, 0.25, 0.50]:
+    score_threshold = test_scores["score"].quantile(1 - high_risk_share)
+    selected = test_scores["score"] >= score_threshold
+    precision = precision_score(y_test, selected, zero_division=0)
+    operational_threshold_rows.append(
         {
             "high_risk_territory_share": high_risk_share,
             "score_percentile_threshold": 1 - high_risk_share,
-            "score_threshold": test_scores["score"].quantile(1 - high_risk_share),
-            "mapped_high_risk_share": float((test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share)).mean()),
-            "precision": precision_score(
-                y_test,
-                test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share),
-                zero_division=0,
-            ),
-            "recall": recall_score(
-                y_test,
-                test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share),
-                zero_division=0,
-            ),
-            "lift_vs_landscape": precision_score(
-                y_test,
-                test_scores["score"] >= test_scores["score"].quantile(1 - high_risk_share),
-                zero_division=0,
-            )
-            / baseline_burned_share,
+            "score_threshold": score_threshold,
+            "mapped_high_risk_share": float(selected.mean()),
+            "precision": precision,
+            "recall": recall_score(y_test, selected, zero_division=0),
+            "lift_vs_landscape": precision / baseline_burned_share,
         }
-        for high_risk_share in [0.10, 0.25, 0.50]
-    ]
-)
-operational_threshold_df
-print_section("Operational percentile thresholds on hold-out period", operational_threshold_df)
+    )
+
+operational_threshold_df = pd.DataFrame(operational_threshold_rows)
+display(Markdown("### Operational percentile thresholds on hold-out period"))
+display(operational_threshold_df)
+
+# %% [markdown]
+# The threshold table expresses the same ranking in decision terms. Selecting
+# the top 10% of valid pixels gives the highest precision and lift, but misses
+# nearly half of the hold-out burned pixels. Selecting the top 50% captures most
+# burned pixels but includes much more territory. The right threshold therefore
+# depends on the operational cost of field checks, fuel management, or missed
+# susceptible areas.
 
 # %%
 medium_threshold = test_scores["score"].quantile(0.50)
@@ -787,8 +1033,8 @@ susceptibility_class_df = (
 )
 susceptibility_class_df["captured_burned_share"] = susceptibility_class_df["burned_pixels"] / test_scores["target"].sum()
 susceptibility_class_df["lift_vs_landscape"] = susceptibility_class_df["observed_burned_share"] / baseline_burned_share
-susceptibility_class_df
-print_section("Low, medium, high susceptibility classes on hold-out period", susceptibility_class_df)
+display(Markdown("### Low, medium, high susceptibility classes on hold-out period"))
+display(susceptibility_class_df)
 
 # %%
 fig, ax = plt.subplots(figsize=(7, 4))
@@ -805,13 +1051,9 @@ fig
 
 
 # %% [markdown]
-# ## 9. Thresholds are decisions
-#
-# The Random Forest gives a score.
-# A threshold turns that score into a class label.
-#
-# There is no universal wildfire threshold: it depends on the cost of missing
-# susceptible areas versus over-flagging lower-susceptibility areas.
+# Fixed raw score thresholds are shown only as a sensitivity check. They are
+# less portable than percentile thresholds because the numeric score scale
+# depends on the model, sampling design, and predictor set.
 
 # %%
 threshold_df = pd.DataFrame(
@@ -825,8 +1067,8 @@ threshold_df = pd.DataFrame(
         for threshold in [0.25, 0.50, 0.75]
     ]
 )
-threshold_df
-print_section("Threshold sensitivity", threshold_df)
+display(Markdown("### Threshold sensitivity"))
+display(threshold_df)
 
 # %%
 threshold = 0.50
@@ -846,7 +1088,7 @@ fig
 
 
 # %% [markdown]
-# ## 10. Validation design matters
+# ## 9. Validation design matters
 #
 # The validation split is random within the pre-2016 training pool, so it is
 # useful for tuning but still optimistic for spatial data.
@@ -857,10 +1099,10 @@ fig
 
 
 # %% [markdown]
-# ## 11. MDA variable importance
+# ## 10. MDA variable importance
 #
 # MDA means Mean Decrease in Accuracy.
-# Here "accuracy" is the validation metric we care about: ROC AUC.
+# Here "accuracy" is the ranking metric we care about: hold-out ROC AUC.
 #
 # The idea is simple: shuffle one original predictor, score the model again,
 # and measure how much ROC AUC decreases.
@@ -870,8 +1112,8 @@ fig
 # variable.
 #
 # This is model interpretation, not causal attribution.
-# For example, coordinates can be predictive because they summarize location,
-# but location is not itself a transferable fire mechanism.
+# For example, vegetation class can proxy fuel structure, land management, and
+# geography; permutation importance cannot separate those mechanisms by itself.
 
 # %%
 def raw_feature_auc(model, raw_X, y):
@@ -902,8 +1144,18 @@ importance_df = (
     .sort_values("mda_roc_auc_drop", ascending=False)
     .reset_index(drop=True)
 )
-importance_df
-print_section("Permutation importance on hold-out period", importance_df)
+display(Markdown("### Permutation importance on hold-out period"))
+display(importance_df)
+
+# %% [markdown]
+# Vegetation is the dominant predictor in this fitted baseline, followed by
+# northness, elevation, slope, and accessibility distances. This is consistent
+# with the exploratory contrasts: vegetation class and south-facing exposure
+# separate the sampled burned pixels from the sampled pseudo-absences.
+#
+# The interpretation remains associational. A large MDA drop means the trained
+# Random Forest relied on that variable for hold-out ranking. It does not prove
+# that changing the variable would change fire occurrence.
 
 # %%
 fig, ax = plt.subplots(figsize=(7, 4))
@@ -918,7 +1170,7 @@ fig
 
 
 # %% [markdown]
-# ## 12. Refit and map susceptibility
+# ## 11. Refit and map susceptibility
 #
 # For a strict hold-out evaluation, the mapped model below is still fitted only
 # on the pre-2016 training pool with the selected hyperparameters.
@@ -952,8 +1204,8 @@ susceptibility_grid = np.full(TEMPLATE_SHAPE, np.nan, dtype=float)
 susceptibility_grid[rows, cols] = grid_scores
 
 grid_score_summary = pd.Series(grid_scores).describe(percentiles=[0.1, 0.5, 0.9])
-grid_score_summary
-print_section("Mapped susceptibility score summary", grid_score_summary)
+display(Markdown("### Mapped susceptibility score summary"))
+display(grid_score_summary)
 
 fig, ax = plt.subplots(figsize=(12, 5.5))
 image = ax.imshow(susceptibility_grid, extent=extent, origin="upper", cmap="viridis", vmin=0, vmax=1)
@@ -980,22 +1232,23 @@ fig
 
 
 # %% [markdown]
-# ## 13. Take-home messages
+# ## 12. Take-home messages
 #
 # - Raster predictors can be converted into a tabular supervised-learning problem.
 # - Yearly burned-area rasters provide positives; sampled unburned pixels define the comparison group.
 # - Elevation, slope, aspect, vegetation, and accessibility distances are used as static predictors.
 # - Categorical raster classes can be made numeric with simple dummy variables.
-# - Use a random validation split inside the training period to tune hyperparameters.
+# - Use the validation split only for model selection; report validation metrics with a model that has not been refit on validation rows.
 # - Keep the 2016-2022 hold-out years untouched until final evaluation.
-# - Percentile thresholds translate model scores into operational territory shares.
-# - Evaluate scores before choosing thresholds.
+# - On the bundled data, the hold-out ROC-AUC is about 0.80 and the top quarter of the map captures about 70% of later burned pixels.
+# - PR-AUC and precision remain low in absolute terms because the hold-out base rate is only about 1.5%.
+# - Percentile thresholds translate model scores into operational territory shares, but the threshold is a decision rule, not a property of the model.
 # - MDA variable importance explains model behavior, not ecological causality.
 # - The susceptibility map is a model output and must be interpreted with the sampling and validation design in mind.
 
 
 # %% [markdown]
-# ## 14. Exercises
+# ## 13. Exercises
 #
 # 1. **Add temperature and rain predictors.**
 #    Extend `RASTER_PATHS`, `NUMERIC_FEATURES`, and `FEATURES` with the climate

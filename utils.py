@@ -2,17 +2,6 @@ import numpy as np
 import pandas as pd
 
 
-def print_section(title, value):
-    """Print notebook results when this file is run as a script."""
-    print(f"\n{'=' * 80}\n{title}\n{'=' * 80}")
-    if isinstance(value, pd.DataFrame):
-        print(value.to_string())
-    elif isinstance(value, pd.Series):
-        print(value.to_string())
-    else:
-        print(value)
-
-
 def combined_fire_mask(fire_masks, years):
     """Combine yearly binary fire rasters into one period mask."""
     selected_masks = [fire_masks[year] for year in years]
