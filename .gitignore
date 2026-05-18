@@ -1,5 +1,5 @@
 .venv/
 ppt/
-data/
+data_original/
 __pycache__/
 .DS_Store

@@ -4,7 +4,7 @@
 # This notebook is a compact end-to-end example for environmental modelling.
 # It shows the complete baseline workflow:
 #
-# 1. read raster predictors and burned-area polygons
+# 1. read raster predictors and yearly burned-area rasters
 # 2. convert geospatial data into a tabular modelling dataset
 # 3. sample burned and unburned pixels
 # 4. split pre-2016 samples into training and validation sets
@@ -20,12 +20,10 @@
 # %%
 from pathlib import Path
 
-import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import rasterio
-from rasterio.features import rasterize
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
@@ -41,25 +39,32 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GridSearchCV, PredefinedSplit, train_test_split
 
+from utils import (
+    combined_fire_mask,
+    full_period_table,
+    pixel_frame,
+    print_section,
+    sampled_period_table,
+)
+
 plt.style.use("seaborn-v0_8-whitegrid")
 pd.set_option("display.max_columns", 100)
 pd.set_option("display.width", 140)
 
 RANDOM_STATE = 42
-TARGET_CRS = "EPSG:3003"
 HOLDOUT_START_YEAR = 2016
 
 DATA_DIR = Path("data")
-FIRE_PATH = DATA_DIR / "aree_bruciate" / "incendi_1997_2022_7791.shp"
+FIRE_RASTER_DIR = DATA_DIR / "fires"
 
 RASTER_PATHS = {
-    "elevation": DATA_DIR / "dtm_liguria_2017_100m_3003.tif",
+    "elevation": DATA_DIR / "elevation.tif",
     "slope": DATA_DIR / "slope.tif",
-    "aspect_eastness": DATA_DIR / "easting.tif",
-    "aspect_northness": DATA_DIR / "northing.tif",
-    "vegetation": DATA_DIR / "corine_vegetation_cod_uso.tif",
-    "urban_distance": DATA_DIR / "urban_distance.tiff",
-    "roads_distance": DATA_DIR / "roads_distance.tiff",
+    "aspect_eastness": DATA_DIR / "aspect_eastness.tif",
+    "aspect_northness": DATA_DIR / "aspect_northness.tif",
+    "vegetation": DATA_DIR / "vegetation.tif",
+    "urban_distance": DATA_DIR / "urban_distance.tif",
+    "roads_distance": DATA_DIR / "roads_distance.tif",
 }
 
 NUMERIC_FEATURES = ["elevation", "slope", "aspect_eastness", "aspect_northness", "urban_distance", "roads_distance"]
@@ -81,17 +86,6 @@ VEGETATION_NAMES = {
 }
 
 
-def print_section(title, value):
-    """Print notebook results when this file is run as a script."""
-    print(f"\n{'=' * 80}\n{title}\n{'=' * 80}")
-    if isinstance(value, pd.DataFrame):
-        print(value.to_string())
-    elif isinstance(value, pd.Series):
-        print(value.to_string())
-    else:
-        print(value)
-
-
 # %% [markdown]
 # ## 1. Prediction problem
 #
@@ -107,8 +101,8 @@ problem_df = pd.DataFrame(
         "choice": ["unit", "positive label", "negative label", "model output", "main caveat"],
         "definition": [
             "one valid 100 m pixel",
-            f"pixel centre inside a burned polygon for the evaluated period",
-            f"sampled valid pixel outside burned polygons for the evaluated period",
+            f"pixel centre in a burned raster cell for the evaluated period",
+            f"sampled valid pixel outside burned pixels for the evaluated period",
             "relative susceptibility score",
             "nearby pixels are not independent and predictors are static",
         ],
@@ -122,36 +116,53 @@ print_section("Prediction problem", problem_df)
 # ## 2. Raster predictors
 #
 # Raster values become feature columns in the modelling table.
-# Before sampling, check that all predictors are on the same grid.
+# We assume all predictors are on the same grid.
+
+# %% [markdown]
+# ### Choose the reference grid
+#
+# Raster data are stored as regular grids. The `slope` raster is used as the
+# reference grid for the rest of the workflow:
+#
+# - `TEMPLATE_SHAPE` tells us how many rows and columns the analysis grid has
+# - `TEMPLATE_TRANSFORM` converts between raster row/column indices and map
+#   coordinates
+#
+# The yearly burned-area rasters use this same grid, so target labels and
+# predictor values refer to the same pixel locations.
 
 # %%
 with rasterio.open(RASTER_PATHS["slope"]) as src:
     TEMPLATE_TRANSFORM = src.transform
     TEMPLATE_SHAPE = (src.height, src.width)
 
+extent = (
+    TEMPLATE_TRANSFORM.c,
+    TEMPLATE_TRANSFORM.c + TEMPLATE_TRANSFORM.a * TEMPLATE_SHAPE[1],
+    TEMPLATE_TRANSFORM.f + TEMPLATE_TRANSFORM.e * TEMPLATE_SHAPE[0],
+    TEMPLATE_TRANSFORM.f,
+)
+
 raster_arrays = {}
-raster_checks = []
 
 for name, path in RASTER_PATHS.items():
     with rasterio.open(path) as src:
         raster_arrays[name] = src.read(1, masked=True).astype("float32").filled(np.nan)
-        raster_checks.append(
-            {
-                "raster": name,
-                "shape_matches": (src.height, src.width) == TEMPLATE_SHAPE,
-                "transform_matches": src.transform == TEMPLATE_TRANSFORM,
-                "path": str(path),
-            }
-        )
 
-raster_check_df = pd.DataFrame(raster_checks)
-raster_check_df
-print_section("Raster grid checks", raster_check_df)
+
+# %% [markdown]
+# ### Create the analysis mask
+#
+# The model should only learn from pixels where the predictors are meaningful.
+# The vegetation raster defines the broad analysis domain: pixels with missing
+# vegetation or code `0` are excluded. Numeric predictors are then masked to this
+# same domain, and `valid_mask` keeps only pixels where every numeric predictor
+# is available.
+#
+# This mask is reused throughout the notebook. It limits sampling, evaluation,
+# and final mapping to the same set of valid landscape pixels.
 
 # %%
-if not raster_check_df[["shape_matches", "transform_matches"]].all(axis=None):
-    raise ValueError("Predictor rasters must have the same shape and transform.")
-
 vegetation = raster_arrays["vegetation"]
 analysis_mask = np.isfinite(vegetation) & (vegetation != 0)
 
@@ -171,8 +182,6 @@ raster_summary_df = pd.DataFrame(
             "feature": feature,
             "valid_pixels": int(np.isfinite(raster_arrays[feature]).sum()),
             "median": float(np.nanmedian(raster_arrays[feature])),
-            "p10": float(np.nanpercentile(raster_arrays[feature], 10)),
-            "p90": float(np.nanpercentile(raster_arrays[feature], 90)),
         }
         for feature in NUMERIC_FEATURES
     ]
@@ -180,39 +189,73 @@ raster_summary_df = pd.DataFrame(
 raster_summary_df
 print_section("Raster predictor summary", raster_summary_df)
 
-# %%
-fig, axes = plt.subplots(1, 3, figsize=(13, 4), constrained_layout=True)
+# %% [markdown]
+# ### Map all predictor rasters
+#
+# Mapping each feature is a quick visual check before modelling. It helps reveal
+# spatial structure, missing areas, and variables that may be strongly tied to
+# geography. The vegetation layer is categorical; the other predictors are
+# continuous rasters.
 
-for ax, feature in zip(axes, ["elevation", "slope", "urban_distance"]):
-    image = ax.imshow(np.where(analysis_mask, raster_arrays[feature], np.nan), cmap="viridis")
+# %%
+fig, axes = plt.subplots(3, 3, figsize=(12, 10), constrained_layout=True)
+axes = axes.ravel()
+
+for ax, feature in zip(axes, FEATURES):
+    feature_map = np.where(analysis_mask, raster_arrays[feature], np.nan)
+    cmap = "tab20" if feature == "vegetation" else "viridis"
+    image = ax.imshow(feature_map, extent=extent, origin="upper", cmap=cmap)
     ax.set_title(feature.replace("_", " "), loc="left", fontweight="bold")
     ax.set_xticks([])
     ax.set_yticks([])
     fig.colorbar(image, ax=ax, fraction=0.04, pad=0.02)
 
-fig.suptitle("Example predictor rasters", x=0.01, ha="left", fontweight="bold")
+for ax in axes[len(FEATURES) :]:
+    ax.axis("off")
+
+fig.suptitle("Predictor rasters", x=0.01, ha="left", fontweight="bold")
 fig
 
 
 # %% [markdown]
-# ## 3. Burned-area polygons
+# ## 3. Burned-area rasters
 #
-# Burned polygons define the positive label.
-# We use their dates only for validation design:
+# Yearly burned-area rasters define the positive label.
+# Each file is a binary raster on the predictor grid:
+#
+# - `1` means the pixel burned in that year
+# - `0` means the pixel did not burn in that year
+#
+# We use the years only for validation design:
 #
 # - training period: years before 2016
 # - hold-out period: 2016-2022
 
 # %%
-fires = gpd.read_file(FIRE_PATH, engine="pyogrio").copy()
-fires["fire_year"] = fires["DATA_INC"].astype(int)
-fires = fires.to_crs(TARGET_CRS)
+fire_raster_paths = {
+    int(path.stem.split("_")[1]): path
+    for path in sorted(FIRE_RASTER_DIR.glob("fire_*.tiff"))
+}
+fire_years = sorted(fire_raster_paths)
 
-fire_summary_df = (
-    fires.assign(area_km2=fires.geometry.area / 1_000_000)
-    .groupby("fire_year")
-    .agg(polygons=("geometry", "size"), burned_area_km2=("area_km2", "sum"))
-    .reset_index()
+if not fire_years:
+    raise FileNotFoundError(f"No fire rasters found in {FIRE_RASTER_DIR}")
+
+fire_masks = {}
+for year, path in fire_raster_paths.items():
+    with rasterio.open(path) as src:
+        fire_masks[year] = src.read(1).astype(bool)
+
+pixel_area_km2 = abs(TEMPLATE_TRANSFORM.a * TEMPLATE_TRANSFORM.e) / 1_000_000
+fire_summary_df = pd.DataFrame(
+    [
+        {
+            "fire_year": year,
+            "burned_pixels": int(mask.sum()),
+            "burned_area_km2": int(mask.sum()) * pixel_area_km2,
+        }
+        for year, mask in fire_masks.items()
+    ]
 )
 fire_summary_df.head()
 print_section("Burned-area summary by year", fire_summary_df)
@@ -227,7 +270,6 @@ ax.tick_params(axis="x", rotation=45)
 ax.spines["top"].set_visible(False)
 ax.spines["right"].set_visible(False)
 fig.tight_layout()
-fig
 
 
 # %% [markdown]
@@ -235,7 +277,7 @@ fig
 #
 # The geospatial problem becomes standard supervised learning after sampling:
 # each row is a pixel, feature columns come from rasters, and the target comes
-# from the burned-area mask.
+# from the burned-area rasters.
 #
 # We use a temporal split:
 #
@@ -250,95 +292,102 @@ fig
 # labelled burned or unburned for the hold-out period. This makes test metrics
 # reflect the real class imbalance in the evaluation period.
 
+# %% [markdown]
+# ### Convert selected pixels into rows
+#
+# `pixel_frame` is the bridge between raster data and tabular machine learning.
+# It receives raster row/column indices, converts them to map coordinates, and
+# extracts each predictor value at those pixel locations.
+#
+# The returned table has one row per pixel. Keeping `row`, `col`, `x`, and `y`
+# makes it possible to move back and forth between model tables and maps.
+
+# %% [markdown]
+# ### Combine yearly fire rasters by period
+#
+# The yearly fire rasters are already on the predictor grid. For a period such
+# as 1997-2015 or 2016-2022, we combine the corresponding yearly rasters with a
+# logical OR. A `True` cell means that pixel burned at least once during that
+# period.
+#
+# The training helper keeps all valid burned pixels and randomly samples the
+# same number of valid unburned pixels. Those unburned samples are
+# pseudo-absences: they are valid landscape pixels with no mapped fire in the
+# training period, used as the comparison class for this baseline.
+#
+# The hold-out helper keeps every valid pixel so the test set reflects the real
+# imbalance between burned and unburned landscape.
+
+# %% [markdown]
+# ### Build temporal datasets
+#
+# Fires before 2016 define the training pool. Fires from 2016 onward define the
+# final hold-out test period. The validation split is carved out of the
+# pre-2016 training pool, so model selection never sees the later fires.
+#
+# This keeps two evaluation questions separate:
+#
+# - validation: which Random Forest settings work best on pre-2016 samples?
+# - hold-out: do those settings rank later burned pixels higher than later
+#   unburned pixels?
+
 # %%
-def pixel_frame(rows, cols, target, sample_type):
-    # Convert raster row/column indices into a tabular pixel dataset.
-    # The x/y coordinates are useful for mapping and later spatial diagnostics.
-    rows = np.asarray(rows, dtype=int)
-    cols = np.asarray(cols, dtype=int)
+train_years = [year for year in fire_years if year < HOLDOUT_START_YEAR]
+test_years = [year for year in fire_years if year >= HOLDOUT_START_YEAR]
 
-    frame = pd.DataFrame(
-        {
-            "target": int(target),
-            "sample_type": sample_type,
-            "row": rows,
-            "col": cols,
-            "x": TEMPLATE_TRANSFORM.c + (cols + 0.5) * TEMPLATE_TRANSFORM.a,
-            "y": TEMPLATE_TRANSFORM.f + (rows + 0.5) * TEMPLATE_TRANSFORM.e,
-        }
-    )
+train_burned_mask = combined_fire_mask(fire_masks, train_years)
+test_burned_mask = combined_fire_mask(fire_masks, test_years)
 
-    # Extract each predictor value at the selected pixel locations.
-    # This is the key raster-to-table step.
-    for feature in FEATURES:
-        values = raster_arrays[feature][rows, cols]
-        frame[feature] = values.astype(int) if feature == "vegetation" else values
+# %% [markdown]
+# ### Map the labels used by each period
+#
+# The training label map marks pixels that burned at least once before 2016.
+# The hold-out label map marks pixels that burned at least once from 2016 to
+# 2022. These maps show the spatial target pattern before any model is fitted.
 
-    return frame
+# %%
+fig, axes = plt.subplots(1, 2, figsize=(12, 4.8), constrained_layout=True)
 
+for ax, period_name, label_mask in [
+    (axes[0], f"{min(train_years)}-{max(train_years)} training labels", train_burned_mask),
+    (axes[1], f"{min(test_years)}-{max(test_years)} hold-out labels", test_burned_mask),
+]:
+    label_map = np.where(valid_mask, label_mask.astype(float), np.nan)
+    image = ax.imshow(label_map, extent=extent, origin="upper", cmap="Reds", vmin=0, vmax=1)
+    ax.set_title(period_name, loc="left", fontweight="bold")
+    ax.set_xticks([])
+    ax.set_yticks([])
 
-def burned_mask_for(fire_frame):
-    # Rasterize polygons into a binary mask on the predictor grid.
-    # True means the pixel burned during the period represented by fire_frame.
-    shapes = [(geometry, 1) for geometry in fire_frame.geometry if geometry is not None and not geometry.is_empty]
-    return rasterize(
-        shapes,
-        out_shape=TEMPLATE_SHAPE,
-        transform=TEMPLATE_TRANSFORM,
-        fill=0,
-        dtype="uint8",
-    ).astype(bool)
+fig.colorbar(image, ax=axes, fraction=0.025, pad=0.02, label="Burned label")
+fig.suptitle("Burned labels by modelling period", x=0.01, ha="left", fontweight="bold")
+fig
 
+# %%
+# Training uses earlier fires; testing uses later fires. The training table
+# keeps all pre-2016 burned pixels and samples an equal number of pre-2016
+# pseudo-absence pixels from valid, unburned locations.
+train_pool_df = sampled_period_table(
+    train_burned_mask,
+    f"{min(train_years)}-{max(train_years)}",
+    RANDOM_STATE,
+    valid_mask,
+    TEMPLATE_TRANSFORM,
+    raster_arrays,
+    FEATURES,
+)
+test_df = full_period_table(
+    test_burned_mask,
+    f"{min(test_years)}-{max(test_years)}",
+    valid_mask,
+    TEMPLATE_TRANSFORM,
+    raster_arrays,
+    FEATURES,
+)
 
-def sampled_period_table(fire_frame, period_name, seed):
-    period_burned_mask = burned_mask_for(fire_frame)
-    burned_rows, burned_cols = np.where(period_burned_mask & valid_mask)
-    unburned_rows, unburned_cols = np.where(~period_burned_mask & valid_mask)
-
-    # Balance the training period so the baseline is easy to fit and explain.
-    # This does not estimate the true landscape prevalence of burning.
-    rng = np.random.default_rng(seed)
-    unburned_sample = rng.choice(unburned_rows.size, size=burned_rows.size, replace=False)
-
-    burned_df = pixel_frame(burned_rows, burned_cols, target=1, sample_type="burned")
-    unburned_df = pixel_frame(
-        unburned_rows[unburned_sample],
-        unburned_cols[unburned_sample],
-        target=0,
-        sample_type="unburned",
-    )
-
-    period_df = pd.concat([burned_df, unburned_df], ignore_index=True)
-    period_df["period"] = period_name
-    period_df["target_name"] = period_df["target"].map({0: "unburned", 1: "burned"})
-    return period_df
-
-
-def full_period_table(fire_frame, period_name):
-    period_burned_mask = burned_mask_for(fire_frame)
-
-    # For testing, keep every valid pixel instead of downsampling unburned pixels.
-    # This makes hold-out metrics reflect the rarity of burned pixels.
-    rows, cols = np.where(valid_mask)
-    targets = period_burned_mask[rows, cols].astype(int)
-
-    period_df = pixel_frame(rows, cols, target=0, sample_type="holdout_full")
-    period_df["target"] = targets
-    period_df["sample_type"] = np.where(period_df["target"] == 1, "burned", "unburned")
-    period_df["period"] = period_name
-    period_df["target_name"] = period_df["target"].map({0: "unburned", 1: "burned"})
-    return period_df
-
-
-train_fires = fires.loc[fires["fire_year"] < HOLDOUT_START_YEAR].copy()
-test_fires = fires.loc[fires["fire_year"] >= HOLDOUT_START_YEAR].copy()
-
-# Training uses earlier fires; testing uses later fires.
-train_pool_df = sampled_period_table(train_fires, f"{train_fires['fire_year'].min()}-{HOLDOUT_START_YEAR - 1}", RANDOM_STATE)
-test_df = full_period_table(test_fires, f"{HOLDOUT_START_YEAR}-{test_fires['fire_year'].max()}")
-
-# The validation split is internal to the training period.
-# It is used for tuning, not for the final scientific evaluation.
+# The validation split is internal to the balanced pre-2016 training pool.
+# Stratification keeps the 50/50 presence/pseudo-absence ratio in both the
+# model-fitting split and the validation split. The validation split is used for
+# tuning, not for the final scientific evaluation.
 train_model_df, validation_df = train_test_split(
     train_pool_df,
     test_size=0.2,
@@ -432,10 +481,19 @@ vegetation_summary_df = (
 vegetation_summary_df
 print_section("Top vegetation classes by sampled burned share", vegetation_summary_df)
 
-# %%
-fig, axes = plt.subplots(1, 2, figsize=(11, 4), constrained_layout=True)
+# %% [markdown]
+# ### Compare all numeric features by sampled class
+#
+# These histograms use the balanced pre-2016 training pool. Blue is the sampled
+# pseudo-absence class; red is the burned class. Strong separation suggests a
+# feature may help rank susceptibility, while heavy overlap means the model will
+# need combinations of variables rather than a single threshold.
 
-for ax, feature in zip(axes, ["elevation", "urban_distance"]):
+# %%
+fig, axes = plt.subplots(2, 3, figsize=(13, 7), constrained_layout=True)
+axes = axes.ravel()
+
+for ax, feature in zip(axes, NUMERIC_FEATURES):
     for target, label, color in [(0, "unburned", "#2563eb"), (1, "burned", "#dc2626")]:
         ax.hist(
             train_pool_df.loc[train_pool_df["target"] == target, feature],
@@ -449,9 +507,9 @@ for ax, feature in zip(axes, ["elevation", "urban_distance"]):
     ax.set_ylabel("Density")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.legend(frameon=False)
 
-fig.suptitle("Sampled predictor distributions", x=0.01, ha="left", fontweight="bold")
+axes[0].legend(frameon=False)
+fig.suptitle("Sampled numeric predictor distributions", x=0.01, ha="left", fontweight="bold")
 fig
 
 
@@ -876,7 +934,15 @@ final_model = RandomForestClassifier(
 final_model.fit(X_train_pool, y_train_pool)
 
 rows, cols = np.where(valid_mask)
-grid_pixels = pixel_frame(rows, cols, target=0, sample_type="map")
+grid_pixels = pixel_frame(
+    rows,
+    cols,
+    target=0,
+    sample_type="map",
+    template_transform=TEMPLATE_TRANSFORM,
+    raster_arrays=raster_arrays,
+    features=FEATURES,
+)
 
 # Predict the fitted model over every valid pixel to create the susceptibility map.
 grid_features = make_features(grid_pixels, FEATURE_COLUMNS)
@@ -889,19 +955,12 @@ grid_score_summary = pd.Series(grid_scores).describe(percentiles=[0.1, 0.5, 0.9]
 grid_score_summary
 print_section("Mapped susceptibility score summary", grid_score_summary)
 
-extent = (
-    TEMPLATE_TRANSFORM.c,
-    TEMPLATE_TRANSFORM.c + TEMPLATE_TRANSFORM.a * TEMPLATE_SHAPE[1],
-    TEMPLATE_TRANSFORM.f + TEMPLATE_TRANSFORM.e * TEMPLATE_SHAPE[0],
-    TEMPLATE_TRANSFORM.f,
-)
-
 fig, ax = plt.subplots(figsize=(12, 5.5))
 image = ax.imshow(susceptibility_grid, extent=extent, origin="upper", cmap="viridis", vmin=0, vmax=1)
 
 # Red contours show the true burned pixels from the 2016-2022 hold-out period.
 # This overlay is visual evaluation only; the numeric test metrics above are the formal evaluation.
-holdout_burned_mask = burned_mask_for(test_fires) & valid_mask
+holdout_burned_mask = test_burned_mask & valid_mask
 ax.contour(
     holdout_burned_mask.astype(int),
     levels=[0.5],
@@ -924,7 +983,7 @@ fig
 # ## 13. Take-home messages
 #
 # - Raster predictors can be converted into a tabular supervised-learning problem.
-# - Burned polygons provide positives; sampled unburned pixels define the comparison group.
+# - Yearly burned-area rasters provide positives; sampled unburned pixels define the comparison group.
 # - Elevation, slope, aspect, vegetation, and accessibility distances are used as static predictors.
 # - Categorical raster classes can be made numeric with simple dummy variables.
 # - Use a random validation split inside the training period to tune hyperparameters.
