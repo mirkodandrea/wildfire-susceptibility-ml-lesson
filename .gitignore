@@ -3,3 +3,4 @@ ppt/
 data_original/
 __pycache__/
 .DS_Store
+*.aux.xml
