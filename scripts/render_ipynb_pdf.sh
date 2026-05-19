@@ -5,7 +5,6 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 notebook_source="wildfire_susceptibility_rf_intro.py"
 notebook_file="wildfire_susceptibility_rf_intro.ipynb"
-html_file="wildfire_susceptibility_rf_intro.html"
 pdf_file="wildfire_susceptibility_rf_intro.pdf"
 timeout_seconds="${NOTEBOOK_TIMEOUT:-1200}"
 
@@ -18,12 +17,6 @@ uv run jupyter nbconvert \
   --execute \
   --inplace \
   --ExecutePreprocessor.timeout="${timeout_seconds}" \
-  "${notebook_file}"
-
-echo "Converting ${notebook_file} to ${html_file}"
-uv run jupyter nbconvert \
-  --to html \
-  --output "$(basename "${html_file}" .html)" \
   "${notebook_file}"
 
 echo "Converting ${notebook_file} to ${pdf_file}"

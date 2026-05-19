@@ -7,6 +7,7 @@ commit_message="${1:-Deploy executed lesson notebook}"
 notebook_source="wildfire_susceptibility_rf_intro.py"
 notebook_file="wildfire_susceptibility_rf_intro.ipynb"
 html_file="wildfire_susceptibility_rf_intro.html"
+pdf_file="wildfire_susceptibility_rf_intro.pdf"
 timeout_seconds="${NOTEBOOK_TIMEOUT:-1200}"
 
 echo "Converting ${notebook_source} to ${notebook_file}"
@@ -26,16 +27,25 @@ uv run jupyter nbconvert \
   --output "$(basename "${html_file}" .html)" \
   "${notebook_file}"
 
+echo "Converting ${notebook_file} to ${pdf_file}"
+uv run jupyter nbconvert \
+  --to webpdf \
+  --output "$(basename "${pdf_file}" .pdf)" \
+  "${notebook_file}"
+
 echo "Staging lesson files"
 git add -u
 git add \
   "${notebook_source}" \
   "${notebook_file}" \
   "${html_file}" \
+  "${pdf_file}" \
   "lesson_setup.py" \
   "utils.py" \
   "README.md" \
-  "scripts/deploy_lesson.sh"
+  "scripts/deploy_lesson.sh" \
+  "scripts/render_ipynb_html.sh" \
+  "scripts/render_ipynb_pdf.sh"
 
 if git diff --cached --quiet; then
   echo "No changes to commit"

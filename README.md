@@ -21,11 +21,15 @@ susceptibility score.
   and notebook viewers.
 - `wildfire_susceptibility_rf_intro.html` - generated HTML version with executed
   outputs.
+- `wildfire_susceptibility_rf_intro.pdf` - generated PDF version with executed
+  outputs.
 - `lesson_setup.py` - shared imports and Colab runtime setup for the lesson.
 - `utils.py` - helper functions for combining yearly fire masks and converting
   raster pixels into tabular samples.
 - `scripts/render_ipynb_html.sh` - local rebuild script for the executed
-  notebook and HTML export.
+  notebook, HTML export, and PDF export.
+- `scripts/render_ipynb_pdf.sh` - local rebuild script for the executed
+  notebook and PDF export.
 - `scripts/deploy_lesson.sh` - local publish script that rebuilds, executes,
   exports, commits, and pushes the lesson outputs.
 - `data/` - prepared predictor rasters and yearly burned-area rasters.
@@ -76,6 +80,13 @@ Create or update the environment:
 uv sync
 ```
 
+The PDF export uses nbconvert's browser-backed `webpdf` exporter. If Playwright
+does not already have Chromium installed locally, install it once:
+
+```bash
+uv run playwright install chromium
+```
+
 ## Running the Lesson
 
 In Google Colab, use the badge at the top of this README. The first setup cell
@@ -104,10 +115,16 @@ Or execute the script-style notebook from the command line:
 uv run python wildfire_susceptibility_rf_intro.py
 ```
 
-To rebuild the executed notebook and HTML export locally:
+To rebuild the executed notebook, HTML export, and PDF export locally:
 
 ```bash
 scripts/render_ipynb_html.sh
+```
+
+To rebuild only the executed notebook and PDF export locally:
+
+```bash
+scripts/render_ipynb_pdf.sh
 ```
 
 ## Publishing
