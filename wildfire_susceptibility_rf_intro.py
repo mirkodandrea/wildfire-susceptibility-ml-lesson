@@ -542,6 +542,7 @@ display(train_pool_df.head())
 # This will be useful to assess how the model characterizes the real landscape distribution of susceptibility, 
 # and to compute metrics that reflect operational performance (e.g., recall at top 10%).
 
+# %%
 test_df = add_period_labels(
     feature_table,
     test_burned_mask,
