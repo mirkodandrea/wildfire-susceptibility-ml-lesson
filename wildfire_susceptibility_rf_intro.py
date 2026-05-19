@@ -2,15 +2,17 @@
 # # Wildfire susceptibility: a Random Forest baseline
 #
 # This notebook is a compact end-to-end example for environmental modelling.
-# It shows the complete baseline workflow:
+# It separates the main steps of the ML pipeline:
 #
-# 1. read raster predictors and yearly burned-area rasters
-# 2. convert geospatial data into a tabular modelling dataset
-# 3. sample burned and unburned pixels
-# 4. split pre-2016 samples into training and validation sets
-# 5. tune and train a Random Forest
-# 6. evaluate on the 2016-2022 hold-out years
-# 7. inspect MDA variable importance and map susceptibility
+# 1. notebook init
+# 2. data preprocessing and feature engineering
+# 3. one-hot encoding on the vegetation variable
+# 4. training dataset preparation with pseudo-absences
+# 5. model tuning
+# 6. training
+# 7. testing
+# 8. metrics
+# 9. model explanation
 #
 # The row unit is one valid 100 m pixel.
 # The target is `1` for pixels burned in the period being sampled and `0` for
@@ -18,7 +20,7 @@
 # The output is a relative susceptibility score, not a calibrated annual fire probability.
 
 # %% [markdown]
-# ## Setup
+# ## 1. Notebook init
 #
 # This cell loads the lesson setup script. In Colab, it first downloads the
 # script from GitHub; the script then installs dependencies and clones the
@@ -103,7 +105,7 @@ VEGETATION_NORM = BoundaryNorm(
 
 
 # %% [markdown]
-# ## 1. Prediction problem
+# ## Prediction problem
 #
 # A wildfire susceptibility baseline asks whether pixels that burn in future
 # years have distinguishable environmental signatures. We train on pre-2016
@@ -120,7 +122,7 @@ VEGETATION_NORM = BoundaryNorm(
 
 
 # %% [markdown]
-# ## 2. Raster predictors
+# ## 2. Data preprocessing and feature engineering
 #
 # Raster values become feature columns in the modelling table.
 # We assume all predictors are on the same grid.
@@ -253,7 +255,7 @@ fig
 
 
 # %% [markdown]
-# ## 3. Burned-area rasters
+# ### Burned-area rasters
 #
 # Yearly burned-area rasters define the positive label.
 # Each file is a binary raster on the predictor grid:
@@ -308,7 +310,52 @@ fig.tight_layout()
 
 
 # %% [markdown]
-# ## 4. Build the modelling table
+# ## 3. One-hot encoding on the vegetation variable
+#
+# Scikit-learn's `RandomForestClassifier` needs numeric columns.
+# The continuous raster predictors are already numeric, but vegetation is a
+# category code. Code `3111` is not smaller or larger than code `324` in a useful
+# ecological sense.
+#
+# One-hot encoding solves that by creating one binary column per vegetation
+# class. Each row gets a `1` in its own vegetation class and `0` in the others.
+#
+# The training columns become the reference. Validation, test, and map data are
+# always reindexed to those same columns so all model inputs have the same shape.
+
+# %%
+def one_hot_encode_vegetation(frame):
+    """Return one binary column per vegetation class."""
+    vegetation_codes = frame["vegetation"].astype(int)
+    vegetation_dummies = pd.get_dummies(
+        vegetation_codes,
+        prefix="vegetation",
+        dtype=int,
+    )
+    return vegetation_dummies.reset_index(drop=True)
+
+
+def make_features(frame, feature_columns=None):
+    """Build the numeric model matrix used by the Random Forest."""
+    numeric_features = frame[NUMERIC_FEATURES].reset_index(drop=True)
+    vegetation_features = one_hot_encode_vegetation(frame)
+
+    model_features = pd.concat(
+        [numeric_features, vegetation_features],
+        axis=1,
+    )
+
+    if feature_columns is not None:
+        model_features = model_features.reindex(
+            columns=feature_columns,
+            fill_value=0,
+        )
+
+    return model_features
+
+
+# %% [markdown]
+# ## 4. Training dataset preparation with pseudo-absences
 #
 # The geospatial problem becomes standard supervised learning after sampling:
 # each row is a pixel, feature columns come from rasters, and the target comes
@@ -487,7 +534,7 @@ display(sample_summary_df)
 
 
 # %% [markdown]
-# ## 5. Quick exploratory analysis
+# ## Quick exploratory analysis
 #
 # Before fitting a model, ask whether burned and unburned sampled pixels differ
 # in the pre-2016 training pool.
@@ -608,37 +655,18 @@ display(vegetation_contrast_df)
 
 
 # %% [markdown]
-# ## 6. Train and tune the baseline model
+# ### Apply the one-hot encoder to the prepared datasets
 #
-# The model needs only numeric columns.
-# Numeric raster features are already numeric. The vegetation code is
-# categorical, so we convert it to dummy variables with `pd.get_dummies`.
-#
-# Hyperparameters are selected on the validation split only.
-# The 2016-2022 hold-out test set is not used until final evaluation.
+# The encoder helper was defined before the sampling section. Now that the
+# training, validation, and hold-out tables exist, we can convert them into
+# model matrices.
 
 # %%
-def make_features(frame, columns=None):
-    # RandomForestClassifier needs numeric columns.
-    # Numeric raster predictors are already ready to use.
-    numeric = frame[NUMERIC_FEATURES].reset_index(drop=True)
-
-    # Vegetation is categorical: code 3111 is not "smaller" than 324 in a
-    # meaningful numeric sense, so we expand it into one binary column per class.
-    vegetation = pd.get_dummies(frame["vegetation"].astype(int), prefix="vegetation", dtype=int)
-    X = pd.concat([numeric, vegetation.reset_index(drop=True)], axis=1)
-
-    # Validation, test, and map data must have exactly the same columns as train.
-    # Missing vegetation classes get a zero-filled dummy column.
-    if columns is not None:
-        X = X.reindex(columns=columns, fill_value=0)
-    return X
-
-
+# Fit the encoding vocabulary on the model-training split.
 X_train = make_features(train_model_df)
 FEATURE_COLUMNS = X_train.columns
 
-# Reuse the training columns everywhere to avoid train/test column mismatch.
+# Reuse the same columns everywhere.
 X_valid = make_features(validation_df, FEATURE_COLUMNS)
 X_test = make_features(test_df, FEATURE_COLUMNS)
 
@@ -646,6 +674,23 @@ y_train = train_model_df["target"]
 y_valid = validation_df["target"]
 y_test = test_df["target"]
 
+display(Markdown("### Encoded feature columns"))
+display(list(FEATURE_COLUMNS))
+
+
+# %% [markdown]
+# ## 5. Model tuning
+#
+# Tuning chooses hyperparameters using only the pre-2016 training and validation
+# data. The 2016-2022 hold-out test set is still untouched.
+#
+# `PredefinedSplit` tells `GridSearchCV` exactly which rows are training rows
+# and which rows are validation rows:
+#
+# - `-1` means "use this row for fitting"
+# - `0` means "use this row for validation"
+
+# %%
 param_grid = {
     "n_estimators": [150, 300],
     "max_features": ["sqrt", 0.5],
@@ -656,19 +701,18 @@ param_grid = {
 X_tuning = pd.concat([X_train, X_valid], ignore_index=True)
 y_tuning = pd.concat([y_train, y_valid], ignore_index=True)
 
-# PredefinedSplit tells GridSearchCV: fit on rows marked -1 and validate on
-# rows marked 0. This preserves our explicit train/validation split.
-validation_fold = PredefinedSplit(
-    test_fold=np.r_[
-        np.full(len(X_train), -1),
-        np.zeros(len(X_valid), dtype=int),
-    ]
-)
+fold_labels = []
+for _ in range(len(X_train)):
+    fold_labels.append(-1)
+for _ in range(len(X_valid)):
+    fold_labels.append(0)
+
+validation_fold = PredefinedSplit(test_fold=fold_labels)
 
 tuning_search = GridSearchCV(
     estimator=RandomForestClassifier(random_state=RANDOM_STATE, n_jobs=-1),
     param_grid=param_grid,
-    scoring=["roc_auc", "average_precision"],
+    scoring=["roc_auc"],
     refit="roc_auc",
     cv=validation_fold,
     n_jobs=1,
@@ -682,7 +726,6 @@ tuning_results_df = (
         [
             "rank_test_roc_auc",
             "mean_test_roc_auc",
-            "mean_test_average_precision",
             "param_n_estimators",
             "param_max_features",
             "param_min_samples_leaf",
@@ -699,11 +742,20 @@ best_params = tuning_search.best_params_
 display(Markdown("### Selected hyperparameters"))
 display(best_params)
 
+# %% [markdown]
+# ## 6. Training
+#
+# After tuning, we fit two models with the selected hyperparameters:
+#
+# - `validation_model` is fitted only on the model-training split, so validation
+#   metrics are honest diagnostics.
+# - `rf_model` is fitted on the full balanced pre-2016 training pool, so it uses
+#   all pre-2016 samples before the final hold-out test.
+#
+# `GridSearchCV` also refits a model internally, but that refit has already seen
+# validation rows. We do not use it for validation reporting.
+
 # %%
-# For an honest validation estimate, fit the selected configuration only on
-# the model-training split. GridSearchCV's refit estimator has seen the
-# validation rows and is therefore only useful as a convenience object, not as a
-# validation-reporting model.
 validation_model = RandomForestClassifier(
     **best_params,
     random_state=RANDOM_STATE,
@@ -711,11 +763,8 @@ validation_model = RandomForestClassifier(
 )
 validation_model.fit(X_train, y_train)
 
-# After choosing hyperparameters, refit on all pre-2016 training-pool samples.
-# The 2016-2022 hold-out set remains untouched until evaluation.
 X_train_pool = make_features(train_pool_df, FEATURE_COLUMNS)
 y_train_pool = train_pool_df["target"]
-X_test = make_features(test_df, FEATURE_COLUMNS)
 
 rf_model = RandomForestClassifier(
     **best_params,
@@ -729,7 +778,7 @@ display(rf_model)
 
 
 # %% [markdown]
-# ## 7. Evaluate susceptibility scores
+# ## 7. Testing
 #
 # Susceptibility is usually used as a ranking.
 # The key hold-out evaluation question is:
@@ -742,18 +791,50 @@ display(rf_model)
 # used to choose hyperparameters. The hold-out set is the full valid landscape
 # in 2016-2022, so it keeps the real rare-event class imbalance.
 #
-# For that reason, validation and hold-out metrics are reported in separate
-# tables. PR-AUC, precision, and top-percentile recall depend strongly on the
-# evaluation population and should not be compared directly between the balanced
-# validation sample and the imbalanced hold-out landscape.
+# This section only creates scores. The next section turns those scores into
+# metrics.
 
 # %%
-TOP_RECALL_SHARES = [0.10, 0.25, 0.50]
-
-
 def fire_score(model, X):
     # predict_proba returns one column per class; select the probability of class 1.
     return model.predict_proba(X)[:, list(model.classes_).index(1)]
+
+
+validation_scores = validation_df[["target", "target_name", "row", "col", "x", "y"]].copy()
+validation_scores["score"] = fire_score(validation_model, X_valid)
+
+test_scores = test_df[["target", "target_name", "row", "col", "x", "y"]].copy()
+test_scores["score"] = fire_score(rf_model, X_test)
+
+score_summary_df = pd.DataFrame(
+    [
+        {
+            "dataset": "validation",
+            "rows": len(validation_scores),
+            "burned_share": validation_scores["target"].mean(),
+            "mean_score": validation_scores["score"].mean(),
+        },
+        {
+            "dataset": "hold-out test",
+            "rows": len(test_scores),
+            "burned_share": test_scores["target"].mean(),
+            "mean_score": test_scores["score"].mean(),
+        },
+    ]
+)
+display(Markdown("### Score summary"))
+display(score_summary_df)
+
+
+# %% [markdown]
+# ## 8. Metrics
+#
+# Validation and hold-out metrics are reported in separate tables because they
+# describe different evaluation populations. The validation set is a balanced
+# sample, while the hold-out set is the full valid landscape.
+
+# %%
+TOP_RECALL_SHARES = [0.10, 0.25, 0.50]
 
 
 def recall_at_top_percent(y_true, score, top_share):
@@ -817,47 +898,42 @@ def boyce_index(y_true, score, n_bins=10):
     return pd.Series(mean_score_by_bin).corr(pd.Series(predicted_expected_ratio), method="spearman")
 
 
-def validation_score_metrics(name, model, X, y):
-    score = fire_score(model, X)
+def validation_score_metrics(name, y, score):
     return {
         "model": name,
         "evaluation_population": "balanced pre-2016 validation sample",
         "rows": len(y),
         "burned_share": float(np.mean(y)),
         "ROC-AUC": roc_auc_score(y, score),
-        "PR-AUC": average_precision_score(y, score),
     }
 
 
-def holdout_landscape_metrics(name, model, X, y):
-    score = fire_score(model, X)
+def holdout_landscape_metrics(name, y, score):
     metrics = {
         "model": name,
         "evaluation_population": "full 2016-2022 valid landscape",
         "rows": len(y),
         "burned_share": float(np.mean(y)),
         "ROC-AUC": roc_auc_score(y, score),
-        "PR-AUC": average_precision_score(y, score),
         "Boyce Index": boyce_index(y, score),
     }
-    metrics.update(
-        {
-            f"Recall@Top {int(top_share * 100)}%": recall_at_top_percent(y, score, top_share)
-            for top_share in TOP_RECALL_SHARES
-        }
-    )
+
+    for top_share in TOP_RECALL_SHARES:
+        metric_name = f"Recall@Top {int(top_share * 100)}%"
+        metrics[metric_name] = recall_at_top_percent(y, score, top_share)
+
     return metrics
 
 
 validation_metrics_df = pd.DataFrame(
-    [validation_score_metrics("tuned random forest", validation_model, X_valid, y_valid)]
+    [validation_score_metrics("tuned random forest", y_valid, validation_scores["score"])]
 ).set_index("model")
 display(Markdown("### Balanced validation tuning diagnostics"))
 display(validation_metrics_df)
 
 # %%
 holdout_metrics_df = pd.DataFrame(
-    [holdout_landscape_metrics("tuned random forest", rf_model, X_test, y_test)]
+    [holdout_landscape_metrics("tuned random forest", y_test, test_scores["score"])]
 ).set_index("model")
 display(Markdown("### Full-landscape hold-out metrics"))
 display(holdout_metrics_df)
@@ -872,11 +948,6 @@ display(holdout_metrics_df)
 # landscape. On the bundled data the hold-out ROC-AUC is about 0.80, meaning
 # later burned pixels usually rank above later unburned pixels.
 #
-# PR-AUC is reported only within its own evaluation population. The hold-out
-# PR-AUC is low in absolute terms because only about 1.5% of valid hold-out
-# pixels burned. That does not contradict the ROC-AUC result; it reflects the
-# rare-event base rate.
-#
 # Recall@Top% is the most directly operational metric here. In the hold-out
 # period, the top 10% of scored territory captures about half of the observed
 # burned pixels, and the top 25% captures about 70%. This is a useful ranking
@@ -884,29 +955,21 @@ display(holdout_metrics_df)
 #
 # The Boyce Index is a monotonic bin diagnostic, so it can saturate when each
 # successive score bin has a higher burned-pixel concentration. Treat it as
-# supporting evidence for the ranking, not as a replacement for PR-AUC or the
+# supporting evidence for the ranking, not as a replacement for ROC-AUC or the
 # top-percentile recall values.
 
 # %%
-fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), constrained_layout=True)
+fig, ax = plt.subplots(figsize=(6, 4.5), constrained_layout=True)
 
-RocCurveDisplay.from_estimator(rf_model, X_test, y_test, name="random forest", ax=axes[0])
-axes[0].plot([0, 1], [0, 1], linestyle="--", color="#94a3b8", linewidth=1)
-axes[0].set_title("ROC curve", loc="left", fontweight="bold")
-
-PrecisionRecallDisplay.from_estimator(rf_model, X_test, y_test, name="random forest", ax=axes[1])
-axes[1].set_title("Precision-recall curve", loc="left", fontweight="bold")
-
-for ax in axes:
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+RocCurveDisplay.from_estimator(rf_model, X_test, y_test, name="random forest", ax=ax)
+ax.plot([0, 1], [0, 1], linestyle="--", color="#94a3b8", linewidth=1)
+ax.set_title("ROC curve", loc="left", fontweight="bold")
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
 
 fig
 
 # %%
-test_scores = test_df[["target", "target_name", "row", "col", "x", "y"]].copy()
-test_scores["score"] = fire_score(rf_model, X_test)
-
 fig, ax = plt.subplots(figsize=(7, 4.5))
 for target, label, color in [(0, "unburned", "#2563eb"), (1, "burned", "#dc2626")]:
     ax.hist(test_scores.loc[test_scores["target"] == target, "score"], bins=30, density=True, alpha=0.5, color=color, label=label)
@@ -943,7 +1006,7 @@ display(score_bin_df)
 
 
 # %% [markdown]
-# ## 8. Thresholds are decisions
+# ## Thresholds are decisions
 #
 # The Random Forest gives a score. Any threshold turns that score into a class
 # label, but there is no universal wildfire threshold. The choice depends on the
@@ -970,16 +1033,13 @@ operational_threshold_rows = []
 for high_risk_share in [0.10, 0.25, 0.50]:
     score_threshold = test_scores["score"].quantile(1 - high_risk_share)
     selected = test_scores["score"] >= score_threshold
-    precision = precision_score(y_test, selected, zero_division=0)
     operational_threshold_rows.append(
         {
             "high_risk_territory_share": high_risk_share,
             "score_percentile_threshold": 1 - high_risk_share,
             "score_threshold": score_threshold,
             "mapped_high_risk_share": float(selected.mean()),
-            "precision": precision,
-            "recall": recall_score(y_test, selected, zero_division=0),
-            "lift_vs_landscape": precision / baseline_burned_share,
+            "captured_burned_share": recall_score(y_test, selected, zero_division=0),
         }
     )
 
@@ -989,11 +1049,10 @@ display(operational_threshold_df)
 
 # %% [markdown]
 # The threshold table expresses the same ranking in decision terms. Selecting
-# the top 10% of valid pixels gives the highest precision and lift, but misses
-# nearly half of the hold-out burned pixels. Selecting the top 50% captures most
-# burned pixels but includes much more territory. The right threshold therefore
-# depends on the operational cost of field checks, fuel management, or missed
-# susceptible areas.
+# the top 10% of valid pixels maps less territory, but misses nearly half of the
+# hold-out burned pixels. Selecting the top 50% captures most burned pixels but
+# includes much more territory. The right threshold therefore depends on the
+# operational cost of field checks, fuel management, or missed susceptible areas.
 
 # %%
 medium_threshold = test_scores["score"].quantile(0.50)
@@ -1047,8 +1106,7 @@ threshold_df = pd.DataFrame(
         {
             "threshold": threshold,
             "mapped_positive_share": float((test_scores["score"] >= threshold).mean()),
-            "precision": precision_score(y_test, test_scores["score"] >= threshold, zero_division=0),
-            "recall": recall_score(y_test, test_scores["score"] >= threshold, zero_division=0),
+            "captured_burned_share": recall_score(y_test, test_scores["score"] >= threshold, zero_division=0),
         }
         for threshold in [0.25, 0.50, 0.75]
     ]
@@ -1074,7 +1132,7 @@ fig
 
 
 # %% [markdown]
-# ## 9. Validation design matters
+# ## Validation design matters
 #
 # The validation split is random within the pre-2016 training pool, so it is
 # useful for tuning but still optimistic for spatial data.
@@ -1085,7 +1143,7 @@ fig
 
 
 # %% [markdown]
-# ## 10. MDA variable importance
+# ## 9. Model explanation
 #
 # MDA means Mean Decrease in Accuracy.
 # Here "accuracy" is the ranking metric we care about: hold-out ROC AUC.
@@ -1156,7 +1214,7 @@ fig
 
 
 # %% [markdown]
-# ## 11. Refit and map susceptibility
+# ## Susceptibility map
 #
 # For a strict hold-out evaluation, the mapped model below is still fitted only
 # on the pre-2016 training pool with the selected hyperparameters.
@@ -1218,7 +1276,7 @@ fig
 
 
 # %% [markdown]
-# ## 12. Take-home messages
+# ## Take-home messages
 #
 # - Raster predictors can be converted into a tabular supervised-learning problem.
 # - Yearly burned-area rasters provide positives; sampled unburned pixels define the comparison group.
@@ -1227,14 +1285,13 @@ fig
 # - Use the validation split only for model selection; report validation metrics with a model that has not been refit on validation rows.
 # - Keep the 2016-2022 hold-out years untouched until final evaluation.
 # - On the bundled data, the hold-out ROC-AUC is about 0.80 and the top quarter of the map captures about 70% of later burned pixels.
-# - PR-AUC and precision remain low in absolute terms because the hold-out base rate is only about 1.5%.
 # - Percentile thresholds translate model scores into operational territory shares, but the threshold is a decision rule, not a property of the model.
 # - MDA variable importance explains model behavior, not ecological causality.
 # - The susceptibility map is a model output and must be interpreted with the sampling and validation design in mind.
 
 
 # %% [markdown]
-# ## 13. Exercises
+# ## Exercises
 #
 # 1. **Add temperature and rain predictors.**
 #    Extend `RASTER_PATHS`, `NUMERIC_FEATURES`, and `FEATURES` with the climate
@@ -1246,8 +1303,8 @@ fig
 #    - `precipitation_winter.tif`
 #
 #    Re-run the workflow and compare the baseline Random Forest with the
-#    climate-augmented Random Forest. Report at least ROC AUC, average precision,
-#    and Brier loss on the 2016-2022 hold-out period. Also inspect whether the
+#    climate-augmented Random Forest. Report at least ROC AUC, Boyce Index,
+#    and top-percentile recall on the 2016-2022 hold-out period. Also inspect whether the
 #    climate variables appear important in the MDA table.
 #
 # 2. **Try another learning algorithm.**
