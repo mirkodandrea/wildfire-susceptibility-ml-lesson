@@ -3,13 +3,14 @@
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mirkodandrea/wildfire-susceptibility-ml-lesson/blob/main/wildfire_susceptibility_rf_intro.ipynb)
 
 Lesson material for a compact, end-to-end machine learning workflow using
-environmental raster data. The main lesson builds a Random Forest baseline for
-wildfire susceptibility from static landscape predictors and yearly burned-area
-rasters.
+environmental raster data. The main lesson builds a tuned Random Forest baseline
+for wildfire susceptibility from static landscape predictors and yearly
+burned-area rasters.
 
 The example is designed for teaching: it starts with raster inspection, turns
-pixels into a tabular modelling dataset, trains and tunes a classifier, evaluates
-on later hold-out years, inspects permutation importance, and maps the resulting
+valid 100 m pixels into a tabular modelling dataset, engineers circular and
+categorical predictors, trains and tunes a classifier, evaluates on later
+hold-out years, inspects permutation importance, and maps the resulting
 susceptibility score.
 
 ## Contents
@@ -23,6 +24,8 @@ susceptibility score.
 - `lesson_setup.py` - shared imports and Colab runtime setup for the lesson.
 - `utils.py` - helper functions for combining yearly fire masks and converting
   raster pixels into tabular samples.
+- `scripts/render_ipynb_html.sh` - local rebuild script for the executed
+  notebook and HTML export.
 - `scripts/deploy_lesson.sh` - local publish script that rebuilds, executes,
   exports, commits, and pushes the lesson outputs.
 - `data/` - prepared predictor rasters and yearly burned-area rasters.
@@ -30,19 +33,27 @@ susceptibility score.
 
 ## Lesson Outline
 
-The main lesson covers:
+The main lesson follows the script sections:
 
-1. Reading raster predictors and yearly burned-area rasters.
-2. Building a valid analysis mask and checking predictor rasters.
-3. Converting burned and unburned pixels into a modelling table.
-4. Splitting pre-2016 samples into training and validation data.
-5. Tuning and training a `RandomForestClassifier`.
-6. Evaluating susceptibility scores on the 2016-2022 hold-out period.
-7. Comparing balanced validation metrics with full-landscape hold-out metrics.
-8. Exploring threshold choices for operational susceptibility classes.
-9. Inspecting mean decrease in accuracy permutation importance.
-10. Refitting the model and mapping the final susceptibility surface.
-11. Working through short extension exercises.
+1. Setup: imports, constants, paths, and runtime configuration.
+2. Data loading and analysis mask: aligned raster ingestion and valid-pixel mask.
+3. Burned-area target and temporal split: yearly fire rasters, pre-2016 training
+   pool, and 2016-2022 hold-out period.
+4. Feature engineering: aspect eastness/northness and vegetation one-hot
+   encoding.
+5. Training set construction: balanced pseudo-absence sampling for training and
+   full-landscape hold-out labels.
+6. Exploratory class comparison: burned vs sampled-unburned predictor contrasts.
+7. Model tuning: `GridSearchCV` with a fixed validation fold and ROC-AUC
+   scoring.
+8. Model fitting: separate validation and final pre-2016 Random Forest models.
+9. Hold-out evaluation: ROC-AUC, recall@top%, score distributions, and decile
+   calibration checks.
+10. Threshold decisions: percentile thresholds, susceptibility classes, and
+    balanced confusion-matrix diagnostics.
+11. Model explanation: permutation importance as mean decrease in hold-out
+    ROC-AUC.
+12. Susceptibility map: full-grid prediction with 2016-2022 burned-area overlay.
 
 The target is `1` for pixels burned during the sampled period and `0` for
 sampled unburned pixels. The model output should be interpreted as a relative
@@ -67,6 +78,11 @@ uv sync
 
 ## Running the Lesson
 
+In Google Colab, use the badge at the top of this README. The first setup cell
+downloads `lesson_setup.py` if needed; in Colab the setup script installs the
+lesson dependencies, clones this repository, and switches into the cloned
+working directory.
+
 Start JupyterLab:
 
 ```bash
@@ -88,6 +104,12 @@ Or execute the script-style notebook from the command line:
 uv run python wildfire_susceptibility_rf_intro.py
 ```
 
+To rebuild the executed notebook and HTML export locally:
+
+```bash
+scripts/render_ipynb_html.sh
+```
+
 ## Publishing
 
 To rebuild the notebook, execute it so outputs are stored, export HTML, commit,
@@ -107,8 +129,10 @@ scripts/deploy_lesson.sh "Update executed lesson outputs"
 
 The prepared `data/` directory contains:
 
-- static predictor rasters such as elevation, slope, aspect components,
-  vegetation, and distances to roads and urban areas;
+- default static predictor rasters: elevation, slope, aspect, vegetation,
+  distance to roads, and distance to urban areas;
+- optional climate rasters used in the extension exercise: summer/winter
+  temperature and summer/winter precipitation;
 - yearly burned-area rasters from 1997 through 2022.
 
 The lesson assumes these rasters are already aligned on the same 100 m grid.
@@ -120,3 +144,15 @@ presence/pseudo-absence samples for model fitting, then evaluates on the full
 valid landscape for the hold-out period. This contrast is part of the lesson:
 validation design, class imbalance, spatial dependence, and threshold choice
 matter as much as the classifier itself.
+
+Important caveats are called out in the notebook: predictors are treated as
+time-invariant, nearby pixels are spatially autocorrelated, pseudo-absence
+sampling changes class prevalence, Random Forest vote fractions are not
+calibrated probabilities, and permutation importance is model reliance rather
+than causal attribution.
+
+## Exercises
+
+The lesson ends with short extensions: adding climate predictors, trying another
+classifier, designing a spatial cross-validation split, varying the
+pseudo-absence ratio, and bootstrapping a confidence interval for hold-out AUC.
