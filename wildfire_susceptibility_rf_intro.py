@@ -35,7 +35,7 @@
 # - Training uses balanced pseudo-absences; hold-out keeps real imbalance.
 # - The model output is a relative susceptibility score.
 # - Main caveats: nearby pixels are spatially autocorrelated, predictors are
-#   assumed time-invariant, and some unburned pixels may have burned undetected.
+#   assumed time-invariant.
 
 # %% [markdown]
 # ## 1. Setup
@@ -226,7 +226,6 @@ for ax, feature in zip(axes, continuous_features(RASTER_FEATURES)):
     ax.set_yticks([])
 
 fig.suptitle("Continuous predictor rasters", x=0.01, ha="left", fontweight="bold")
-fig
 
 # %%
 fig, ax = plt.subplots(figsize=(11, 4.5), constrained_layout=True)
@@ -258,7 +257,6 @@ ax.legend(
 ax.set_title("Vegetation", loc="left", fontweight="bold")
 ax.set_xticks([])
 ax.set_yticks([])
-fig
 
 
 # %% [markdown]
@@ -314,7 +312,6 @@ ax.set_ylabel("Burned area (km²)")
 ax.tick_params(axis="x", rotation=45)
 clean_axes(ax)
 fig.tight_layout()
-fig
 
 # %% [markdown]
 # ### Define the temporal split
@@ -362,7 +359,6 @@ for ax, period_name, label_mask in [
 
 fig.colorbar(image, ax=axes, fraction=0.025, pad=0.02, label="Burned (1) / Unburned (0)")
 fig.suptitle("Burned labels by period", x=0.01, ha="left", fontweight="bold")
-fig
 
 
 # %% [markdown]
@@ -474,8 +470,8 @@ display(feature_table.head())
 # %% [markdown]
 # ## 5. Training set construction
 #
-# *Learning objective:* understand pseudo-absence sampling, why class balance
-# matters for training, and why hold-out evaluation must keep real imbalance.
+# *Learning objective:* understand pseudo-absence sampling and why class
+# balance matters for training.
 #
 # ### Why pseudo-absences?
 #
@@ -497,13 +493,6 @@ display(feature_table.head())
 # Alternative ratios (1:2, 1:5, 1:10) shift the model toward higher
 # specificity at the cost of sensitivity. For a first baseline, 1:1 is the
 # most transparent choice.
-#
-#
-# ### Hold-out set: no balancing
-#
-# The 2016–2022 hold-out set keeps *every* valid pixel. This preserves the
-# real rare-event imbalance so that evaluation metrics reflect operational
-# performance, not artificial balance.
 
 # %%
 def add_period_labels(features, burned_mask, period_name):
@@ -535,83 +524,6 @@ train_pool_df = pd.concat([burned_train_df, unburned_train_df], ignore_index=Tru
 
 display(Markdown("### Training pool sample (balanced 1:1)"))
 display(train_pool_df.head())
-
-# %% [markdown]
-# Test set: all valid pixels with 2016–2022 labels (no balancing).
-# We will run the test on the full landscape, no balancing.
-# This will be useful to assess how the model characterizes the real landscape distribution of susceptibility, 
-# and to compute metrics that reflect operational performance (e.g., recall at top 10%).
-
-# %%
-test_df = add_period_labels(
-    feature_table,
-    test_burned_mask,
-    f"{min(test_years)}–{max(test_years)}",
-)
-
-# %% [markdown]
-# ### Train / validation split
-#
-# The validation split is internal to the balanced pre-2016 training pool.
-# Stratification preserves the 50/50 ratio in both splits. This validation
-# set is used only for hyperparameter tuning; the 2016–2022 hold-out remains
-# untouched until final evaluation.
-#
-# > ⚠️ **Spatial autocorrelation caveat:** this random split does not
-# > respect spatial proximity. Nearby pixels share terrain, vegetation, and
-# > fire history, so validation AUC from this split is likely *optimistic*
-# > compared to truly independent spatial evaluation. The temporal hold-out
-# > (2016–2022) provides a harder test.
-# > This is acceptable as a first baseline for a lesson, a better approach would be to use 
-# > spatial blocks or a spatial cross-validation strategy.
-
-# %%
-train_model_df, validation_df = train_test_split(
-    train_pool_df,
-    test_size=0.2,
-    random_state=RANDOM_STATE,
-    stratify=train_pool_df["target"],
-)
-
-# %%
-dataset_summary_df = pd.DataFrame(
-    [
-        {
-            "dataset": "balanced training pool",
-            "period": train_pool_df["period"].iloc[0],
-            "rows": len(train_pool_df),
-            "burned": int(train_pool_df["target"].sum()),
-            "unburned": int((train_pool_df["target"] == 0).sum()),
-            "burned_share": f"{train_pool_df['target'].mean():.1%}",
-        },
-        {
-            "dataset": "  ↳ model training split",
-            "period": train_model_df["period"].iloc[0],
-            "rows": len(train_model_df),
-            "burned": int(train_model_df["target"].sum()),
-            "unburned": int((train_model_df["target"] == 0).sum()),
-            "burned_share": f"{train_model_df['target'].mean():.1%}",
-        },
-        {
-            "dataset": "  ↳ validation split",
-            "period": validation_df["period"].iloc[0],
-            "rows": len(validation_df),
-            "burned": int(validation_df["target"].sum()),
-            "unburned": int((validation_df["target"] == 0).sum()),
-            "burned_share": f"{validation_df['target'].mean():.1%}",
-        },
-        {
-            "dataset": "hold-out test (full landscape)",
-            "period": test_df["period"].iloc[0],
-            "rows": len(test_df),
-            "burned": int(test_df["target"].sum()),
-            "unburned": int((test_df["target"] == 0).sum()),
-            "burned_share": f"{test_df['target'].mean():.1%}",
-        },
-    ]
-)
-display(Markdown("### Dataset summary"))
-display(dataset_summary_df)
 
 
 # %% [markdown]
@@ -682,7 +594,6 @@ for ax, feature in zip(axes, continuous_features(FEATURES)):
 
 axes[0].legend(frameon=False)
 fig.suptitle("Continuous predictor distributions by class", x=0.01, ha="left", fontweight="bold")
-fig
 
 # %%
 vegetation_plot_df = (
@@ -706,7 +617,6 @@ ax.set_ylabel("")
 clean_axes(ax)
 ax.legend(title="", frameon=False)
 fig.tight_layout()
-fig
 
 
 # %% [markdown]
@@ -719,7 +629,86 @@ fig
 # under-represented. Warm-climate mixed forests show moderate enrichment in
 # burned pixels (21.0% vs 15.9%), suggesting vegetation type is a key
 # discriminator for susceptibility ranking.
+
+
+# %% [markdown]
+# ### Hold-out set: no balancing
 #
+# With the training pool explored above, we can now finalise the dataset
+# structure. The 2016–2022 hold-out set keeps *every* valid pixel. This
+# preserves the real rare-event imbalance so that evaluation metrics reflect
+# operational performance, not artificial balance.
+
+# %%
+test_df = add_period_labels(
+    feature_table,
+    test_burned_mask,
+    f"{min(test_years)}–{max(test_years)}",
+)
+
+# %% [markdown]
+# ### Train / validation split
+#
+# The validation split is internal to the balanced pre-2016 training pool.
+# Stratification preserves the 50/50 ratio in both splits. This validation
+# set is used only for hyperparameter tuning; the 2016–2022 hold-out remains
+# untouched until final evaluation.
+#
+# > ⚠️ **Spatial autocorrelation caveat:** this random split does not
+# > respect spatial proximity. Nearby pixels share terrain, vegetation, and
+# > fire history, so validation AUC from this split is likely *optimistic*
+# > compared to truly independent spatial evaluation. The temporal hold-out
+# > (2016–2022) provides a harder test.
+# > This is acceptable as a first baseline for a lesson, a better approach would be to use
+# > spatial blocks or a spatial cross-validation strategy.
+
+# %%
+train_model_df, validation_df = train_test_split(
+    train_pool_df,
+    test_size=0.2,
+    random_state=RANDOM_STATE,
+    stratify=train_pool_df["target"],
+)
+
+# %%
+dataset_summary_df = pd.DataFrame(
+    [
+        {
+            "dataset": "balanced training pool",
+            "period": train_pool_df["period"].iloc[0],
+            "rows": len(train_pool_df),
+            "burned": int(train_pool_df["target"].sum()),
+            "unburned": int((train_pool_df["target"] == 0).sum()),
+            "burned_share": f"{train_pool_df['target'].mean():.1%}",
+        },
+        {
+            "dataset": "  ↳ model training split",
+            "period": train_model_df["period"].iloc[0],
+            "rows": len(train_model_df),
+            "burned": int(train_model_df["target"].sum()),
+            "unburned": int((train_model_df["target"] == 0).sum()),
+            "burned_share": f"{train_model_df['target'].mean():.1%}",
+        },
+        {
+            "dataset": "  ↳ validation split",
+            "period": validation_df["period"].iloc[0],
+            "rows": len(validation_df),
+            "burned": int(validation_df["target"].sum()),
+            "unburned": int((validation_df["target"] == 0).sum()),
+            "burned_share": f"{validation_df['target'].mean():.1%}",
+        },
+        {
+            "dataset": "hold-out test (full landscape)",
+            "period": test_df["period"].iloc[0],
+            "rows": len(test_df),
+            "burned": int(test_df["target"].sum()),
+            "unburned": int((test_df["target"] == 0).sum()),
+            "burned_share": f"{test_df['target'].mean():.1%}",
+        },
+    ]
+)
+display(Markdown("### Dataset summary"))
+display(dataset_summary_df)
 
 
 # %% [markdown]
@@ -774,13 +763,7 @@ display(list(FEATURE_COLUMNS))
 #
 # Normally `GridSearchCV` would use **k-fold cross-validation**: it splits the
 # data into k chunks, trains on k−1 of them, and validates on the remaining
-# one, rotating through all chunks. This works well for independent samples.
-#
-# However, our data is **spatially autocorrelated** — nearby pixels share
-# similar terrain, vegetation, and fire history. If we randomly shuffle pixels
-# into folds, training and validation data will contain near-neighbors, making
-# the validation score over-optimistic (the model "peeks" at nearby answers).
-#
+# one, rotating through all chunks.
 # Instead, we use `PredefinedSplit` to tell scikit-learn: "always use *this
 # exact* validation set that we already separated earlier." This means:
 #
@@ -789,8 +772,11 @@ display(list(FEATURE_COLUMNS))
 # 2. It reuses the fixed validation subset we already carved out (Section 5),
 #    so tuning results are consistent with the validation scores we inspect
 #    elsewhere. Random k-fold would create new, different splits each time.
+#    Our data is **spatially autocorrelated** — nearby pixels share
+#    similar terrain, vegetation, and fire history. 
 #    We are not considering spatial leakage here; this is an approximation
 #    for a first baseline.
+#
 #
 # ### Hyperparameter ranges explained
 #
@@ -1046,7 +1032,7 @@ ax.plot([0, 1], [0, 1], linestyle="--", color="#94a3b8", linewidth=1, label="Ran
 ax.set_title("ROC curve (2016–2022 hold-out)", loc="left", fontweight="bold")
 ax.legend(loc="lower right", frameon=False)
 clean_axes(ax)
-fig
+
 
 # %%
 fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -1065,39 +1051,7 @@ ax.set_ylabel("Density")
 clean_axes(ax)
 ax.legend(frameon=False)
 fig.tight_layout()
-fig
 
-# %% [markdown]
-# ### Score calibration check
-#
-# If scores are well-calibrated as a ranking, the observed burn rate should
-# increase monotonically across score deciles. The "lift" column shows how
-# many times more likely burning is in each bin compared to the landscape
-# average.
-
-# %%
-score_bin = pd.qcut(test_scores["score"], q=10, duplicates="drop")
-score_bin_df = (
-    test_scores.assign(score_bin=score_bin)
-    .groupby("score_bin", observed=True)
-    .agg(
-        pixels=("target", "size"),
-        mean_score=("score", "mean"),
-        observed_burn_rate=("target", "mean"),
-    )
-    .reset_index()
-)
-score_bin_df["lift_vs_landscape"] = (
-    score_bin_df["observed_burn_rate"] / test_scores["target"].mean()
-).round(1)
-display(Markdown("### Observed burn rate by score decile"))
-display(score_bin_df)
-
-# %% [markdown]
-# The monotonic increase confirms the model ranks correctly: the top decile
-# concentrates fire at several times the landscape base rate, while the bottom
-# deciles are nearly fire-free. Note that even the top bin is mostly unburned —
-# fire is rare even in the most susceptible terrain.
 
 
 # %% [markdown]
@@ -1193,7 +1147,7 @@ ax.set_ylabel("Share of 2016–2022 burned pixels")
 ax.set_ylim(0, max(0.05, class_plot_df["captured_burn_share"].max() * 1.15))
 clean_axes(ax)
 fig.tight_layout()
-fig
+
 
 # %% [markdown]
 # ### Balanced confusion matrix (pedagogical diagnostic)
@@ -1234,7 +1188,6 @@ ax.set_title(
     loc="left",
     fontweight="bold",
 )
-fig
 
 # %%
 tn, fp, fn, tp = (
@@ -1266,25 +1219,7 @@ display(balanced_metrics_df)
 # recall@top% metrics (Section 9) are the primary performance indicators.
 
 
-# %% [markdown]
-# ### Fixed-threshold sensitivity check
-#
-# Raw score thresholds are less portable than percentile thresholds (they
-# depend on model internals), but useful as a sanity check.
 
-# %%
-threshold_df = pd.DataFrame(
-    [
-        {
-            "threshold": threshold,
-            "mapped_positive_share": f"{float((test_scores['score'] >= threshold).mean()):.1%}",
-            "captured_burn_share": f"{recall_score(y_test, test_scores['score'] >= threshold, zero_division=0):.1%}",
-        }
-        for threshold in [0.25, 0.50, 0.75]
-    ]
-)
-display(Markdown("### Fixed threshold sensitivity"))
-display(threshold_df)
 
 
 # %% [markdown]
@@ -1349,7 +1284,6 @@ ax.set_title("Permutation importance (MDA)", loc="left", fontweight="bold")
 ax.set_xlabel("Mean decrease in hold-out ROC-AUC")
 clean_axes(ax)
 fig.tight_layout()
-fig
 
 # %% [markdown]
 # Vegetation is typically the dominant predictor, followed by aspect
@@ -1405,7 +1339,6 @@ ax.set_ylabel("Northing")
 ax.set_aspect("equal", adjustable="box")
 fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02, label="Susceptibility score")
 fig.tight_layout()
-fig
 
 
 # %% [markdown]
@@ -1454,7 +1387,7 @@ fig
 #    Do the climate variables appear in the MDA table?
 #
 # 2. **Try another algorithm.**
-#    Replace `RandomForestClassifier` with `HistGradientBoostingClassifier`,
+#    Replace `RandomForestClassifier` with `XGBClassifier`,
 #    `ExtraTreesClassifier`, or `LogisticRegression`. Keep the same splits.
 #    Compare validation metrics, hold-out metrics, and score distributions.
 #    Which model produces sharper score separation?
@@ -1470,7 +1403,3 @@ fig
 #    change the score distribution, the ROC-AUC, and the confusion matrix?
 #    When might a higher ratio be preferable?
 #
-# 5. **Bootstrap confidence interval for AUC.**
-#    Resample the hold-out scores with replacement (e.g., 1000 bootstrap
-#    replicates) and compute ROC-AUC on each. Report the 95% confidence
-#    interval. How stable is the ~0.80 estimate?

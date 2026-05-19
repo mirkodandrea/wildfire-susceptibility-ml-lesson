@@ -13,4 +13,5 @@ dependencies = [
     "scikit-learn>=1.8.0",
     "jupyterlab>=4.5.7",
     "jupytext>=1.19.3",
+    "nbconvert[webpdf]>=7.16.6",
 ]
