@@ -64,10 +64,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
-    PrecisionRecallDisplay,
     RocCurveDisplay,
-    average_precision_score,
-    precision_score,
     recall_score,
     roc_auc_score,
 )
@@ -98,10 +95,7 @@ __all__ = [
     "RandomForestClassifier",
     "permutation_importance",
     "ConfusionMatrixDisplay",
-    "PrecisionRecallDisplay",
     "RocCurveDisplay",
-    "average_precision_score",
-    "precision_score",
     "recall_score",
     "roc_auc_score",
     "GridSearchCV",
