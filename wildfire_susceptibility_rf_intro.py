@@ -6,7 +6,7 @@
 #
 # 1. notebook init
 # 2. data preprocessing and feature engineering
-# 3. one-hot encoding on the vegetation variable
+# 3. feature engineering for aspect and vegetation
 # 4. training dataset preparation with pseudo-absences
 # 5. model tuning
 # 6. training
@@ -48,14 +48,15 @@ FIRE_RASTER_DIR = DATA_DIR / "fires"
 RASTER_PATHS = {
     "elevation": DATA_DIR / "elevation.tif",
     "slope": DATA_DIR / "slope.tif",
-    "aspect_eastness": DATA_DIR / "aspect_eastness.tif",
-    "aspect_northness": DATA_DIR / "aspect_northness.tif",
+    "aspect": DATA_DIR / "aspect.tif",
     "vegetation": DATA_DIR / "vegetation.tif",
     "urban_distance": DATA_DIR / "urban_distance.tif",
     "roads_distance": DATA_DIR / "roads_distance.tif",
 }
 
+RASTER_NUMERIC_FEATURES = ["elevation", "slope", "aspect", "urban_distance", "roads_distance"]
 NUMERIC_FEATURES = ["elevation", "slope", "aspect_eastness", "aspect_northness", "urban_distance", "roads_distance"]
+RASTER_FEATURES = [*RASTER_NUMERIC_FEATURES, "vegetation"]
 FEATURES = [*NUMERIC_FEATURES, "vegetation"]
 
 VEGETATION_NAMES = {
@@ -164,9 +165,9 @@ for name, path in RASTER_PATHS.items():
 #
 # The model should only learn from pixels where the predictors are meaningful.
 # The vegetation raster defines the broad analysis domain: pixels with missing
-# vegetation or code `0` are excluded. Numeric predictors are then masked to this
-# same domain, and `valid_mask` keeps only pixels where every numeric predictor
-# is available.
+# vegetation or code `0` are excluded. Source numeric predictors are then masked
+# to this same domain, and `valid_mask` keeps only pixels where every source
+# numeric predictor is available.
 #
 # This mask is reused throughout the notebook. It limits sampling, evaluation,
 # and final mapping to the same set of valid landscape pixels.
@@ -176,7 +177,7 @@ vegetation = raster_arrays["vegetation"]
 analysis_mask = np.isfinite(vegetation) & (vegetation != 0)
 
 valid_mask = analysis_mask.copy()
-for feature in NUMERIC_FEATURES:
+for feature in RASTER_NUMERIC_FEATURES:
     raster_arrays[feature] = np.where(analysis_mask, raster_arrays[feature], np.nan)
     valid_mask &= np.isfinite(raster_arrays[feature])
 
@@ -192,7 +193,7 @@ raster_summary_df = pd.DataFrame(
             "valid_pixels": int(np.isfinite(raster_arrays[feature]).sum()),
             "median": float(np.nanmedian(raster_arrays[feature])),
         }
-        for feature in NUMERIC_FEATURES
+        for feature in RASTER_NUMERIC_FEATURES
     ]
 )
 display(Markdown("### Raster predictor summary"))
@@ -203,14 +204,19 @@ display(raster_summary_df)
 #
 # Mapping each feature is a quick visual check before modelling. It helps reveal
 # spatial structure, missing areas, and variables that may be strongly tied to
-# geography. The vegetation layer is categorical; the other predictors are
-# continuous rasters.
+# geography. The vegetation layer is categorical; the other source predictors
+# are continuous rasters.
 
 # %%
-fig, axes = plt.subplots(len(NUMERIC_FEATURES), 1, figsize=(8, 3 * len(NUMERIC_FEATURES)), constrained_layout=True)
+fig, axes = plt.subplots(
+    len(RASTER_NUMERIC_FEATURES),
+    1,
+    figsize=(8, 3 * len(RASTER_NUMERIC_FEATURES)),
+    constrained_layout=True,
+)
 axes = np.atleast_1d(axes)
 
-for ax, feature in zip(axes, NUMERIC_FEATURES):
+for ax, feature in zip(axes, RASTER_NUMERIC_FEATURES):
     feature_map = np.where(analysis_mask, raster_arrays[feature], np.nan)
     image = ax.imshow(feature_map, extent=extent, origin="upper", cmap="viridis")
     fig.colorbar(image, ax=ax, fraction=0.04, pad=0.02)
@@ -310,11 +316,19 @@ fig.tight_layout()
 
 
 # %% [markdown]
-# ## 3. One-hot encoding on the vegetation variable
+# ## 3. Feature engineering
 #
 # Scikit-learn's `RandomForestClassifier` needs numeric columns.
-# The continuous raster predictors are already numeric, but vegetation is a
-# category code. Code `3111` is not smaller or larger than code `324` in a useful
+# The continuous raster predictors are already numeric, but aspect needs a
+# circular representation and vegetation is a category code. Aspect values near
+# 0 and 360 degrees represent similar directions, so modelling raw degrees would
+# create an artificial discontinuity. We convert aspect to eastness and
+# northness:
+#
+# - `aspect_eastness = sin(aspect in radians)`
+# - `aspect_northness = cos(aspect in radians)`
+#
+# Vegetation code `3111` is not smaller or larger than code `324` in a useful
 # ecological sense.
 #
 # One-hot encoding solves that by creating one binary column per vegetation
@@ -324,6 +338,15 @@ fig.tight_layout()
 # always reindexed to those same columns so all model inputs have the same shape.
 
 # %%
+def add_aspect_features(frame):
+    """Add eastness and northness from aspect degrees."""
+    engineered = frame.copy()
+    aspect_radians = np.deg2rad(engineered["aspect"])
+    engineered["aspect_eastness"] = np.sin(aspect_radians)
+    engineered["aspect_northness"] = np.cos(aspect_radians)
+    return engineered
+
+
 def one_hot_encode_vegetation(frame):
     """Return one binary column per vegetation class."""
     vegetation_codes = frame["vegetation"].astype(int)
@@ -337,8 +360,9 @@ def one_hot_encode_vegetation(frame):
 
 def make_features(frame, feature_columns=None):
     """Build the numeric model matrix used by the Random Forest."""
-    numeric_features = frame[NUMERIC_FEATURES].reset_index(drop=True)
-    vegetation_features = one_hot_encode_vegetation(frame)
+    engineered_frame = add_aspect_features(frame) if "aspect" in frame.columns else frame
+    numeric_features = engineered_frame[NUMERIC_FEATURES].reset_index(drop=True)
+    vegetation_features = one_hot_encode_vegetation(engineered_frame)
 
     model_features = pd.concat(
         [numeric_features, vegetation_features],
@@ -455,7 +479,7 @@ train_pool_df = sampled_period_table(
     valid_mask,
     TEMPLATE_TRANSFORM,
     raster_arrays,
-    FEATURES,
+    RASTER_FEATURES,
 )
 test_df = full_period_table(
     test_burned_mask,
@@ -463,8 +487,11 @@ test_df = full_period_table(
     valid_mask,
     TEMPLATE_TRANSFORM,
     raster_arrays,
-    FEATURES,
+    RASTER_FEATURES,
 )
+
+train_pool_df = add_aspect_features(train_pool_df)
+test_df = add_aspect_features(test_df)
 
 # The validation split is internal to the balanced pre-2016 training pool.
 # Stratification keeps the 50/50 presence/pseudo-absence ratio in both the
@@ -655,11 +682,11 @@ display(vegetation_contrast_df)
 
 
 # %% [markdown]
-# ### Apply the one-hot encoder to the prepared datasets
+# ### Apply feature engineering to the prepared datasets
 #
-# The encoder helper was defined before the sampling section. Now that the
-# training, validation, and hold-out tables exist, we can convert them into
-# model matrices.
+# The feature-engineering helpers were defined before the sampling section. Now
+# that the training, validation, and hold-out tables exist, we can convert them
+# into model matrices.
 
 # %%
 # Fit the encoding vocabulary on the model-training split.
@@ -1237,7 +1264,7 @@ grid_pixels = pixel_frame(
     sample_type="map",
     template_transform=TEMPLATE_TRANSFORM,
     raster_arrays=raster_arrays,
-    features=FEATURES,
+    features=RASTER_FEATURES,
 )
 
 # Predict the fitted model over every valid pixel to create the susceptibility map.
@@ -1294,8 +1321,8 @@ fig
 # ## Exercises
 #
 # 1. **Add temperature and rain predictors.**
-#    Extend `RASTER_PATHS`, `NUMERIC_FEATURES`, and `FEATURES` with the climate
-#    rasters in `data/`:
+#    Extend `RASTER_PATHS`, `RASTER_NUMERIC_FEATURES`, `NUMERIC_FEATURES`,
+#    `RASTER_FEATURES`, and `FEATURES` with the climate rasters in `data/`:
 #
 #    - `temperature_summer.tif`
 #    - `temperature_winter.tif`
