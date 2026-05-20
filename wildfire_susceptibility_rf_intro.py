@@ -1046,10 +1046,9 @@ ax.set_title(
 # > scores strictly as a *ranking*, not as an estimate of P(fire).
 
 # %%
-from sklearn.metrics import roc_auc_score           # area under the ROC curve — threshold-free ranking quality
-from sklearn.metrics import recall_score            # fraction of positives correctly retrieved at a threshold
-from sklearn.metrics import RocCurveDisplay         # plot the ROC curve from an estimator or raw predictions
-from sklearn.metrics import ConfusionMatrixDisplay  # plot the confusion matrix
+from sklearn.metrics import roc_auc_score  # area under the ROC curve — threshold-free ranking quality
+from sklearn.metrics import recall_score   # fraction of positives correctly retrieved at a threshold
+from sklearn.metrics import RocCurveDisplay  # plot the ROC curve from an estimator or raw predictions
 
 
 def fire_score(model, X):
@@ -1289,77 +1288,6 @@ ax.set_ylabel("Share of 2016–2022 burned pixels")
 ax.set_ylim(0, max(0.05, class_plot_df["captured_burn_share"].max() * 1.15))
 clean_axes(ax)
 fig.tight_layout()
-
-
-# %% [markdown]
-# ### Balanced confusion matrix (pedagogical diagnostic)
-#
-# Confusion matrices are hard to interpret on the full landscape where
-# unburned pixels outnumber burned pixels 20:1. For a clearer diagnostic,
-# we subsample a 50/50 test set from the 2016–2022 hold-out.
-#
-# This balanced matrix shows whether the model has learned a real signal,
-# but it does **not** represent landscape-level precision or false-alarm rates.
-
-# %%
-burned_test_scores = test_scores.loc[test_scores["target"] == 1]
-unburned_test_scores = test_scores.loc[test_scores["target"] == 0].sample(
-    n=len(burned_test_scores),
-    random_state=RANDOM_STATE,
-)
-balanced_test_scores = (
-    pd.concat([burned_test_scores, unburned_test_scores], ignore_index=True)
-    .sample(frac=1, random_state=RANDOM_STATE)
-    .reset_index(drop=True)
-)
-
-balanced_confusion_threshold = 0.50
-balanced_test_prediction = balanced_test_scores["score"] >= balanced_confusion_threshold
-
-fig, ax = plt.subplots(figsize=(5, 4.5), constrained_layout=True)
-ConfusionMatrixDisplay.from_predictions(
-    balanced_test_scores["target"],
-    balanced_test_prediction,
-    display_labels=["unburned", "burned"],
-    cmap="Blues",
-    colorbar=False,
-    ax=ax,
-)
-ax.set_title(
-    f"Balanced hold-out (threshold = {balanced_confusion_threshold})",
-    loc="left",
-    fontweight="bold",
-)
-
-# %%
-tn, fp, fn, tp = (
-    int((~balanced_test_prediction & (balanced_test_scores["target"] == 0)).sum()),
-    int((balanced_test_prediction & (balanced_test_scores["target"] == 0)).sum()),
-    int((~balanced_test_prediction & (balanced_test_scores["target"] == 1)).sum()),
-    int((balanced_test_prediction & (balanced_test_scores["target"] == 1)).sum()),
-)
-
-balanced_metrics_df = pd.DataFrame(
-    [
-        {
-            "threshold": balanced_confusion_threshold,
-            "accuracy": round((tp + tn) / (tp + tn + fp + fn), 3),
-            "sensitivity (recall)": round(tp / (tp + fn), 3),
-            "specificity": round(tn / (tn + fp), 3),
-            "precision": round(tp / (tp + fp), 3),
-            "F1": round(2 * tp / (2 * tp + fp + fn), 3),
-        }
-    ]
-)
-display(Markdown("### Balanced confusion metrics"))
-display(balanced_metrics_df)
-
-# %% [markdown]
-# Both sensitivity and specificity around 70–75% confirm the model has learned
-# a real discriminative signal. The balanced F1 ~ 0.72 is a decent baseline.
-# However, for susceptibility mapping the full-landscape ROC-AUC and
-# recall@top% metrics (Section 9) are the primary performance indicators.
-
 
 
 
