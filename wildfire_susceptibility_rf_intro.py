@@ -23,10 +23,10 @@
 # | 6 | Exploratory class comparison | Burned vs unburned contrasts |
 # | 7 | Model tuning | Hyperparameter grid search |
 # | 8 | Model fitting | Final pre-2016 model |
-# | 9 | Hold-out evaluation | ROC-AUC, recall@top%, score distributions |
-# | 10 | Threshold decisions | Percentile-based operational thresholds |
-# | 11 | Model explanation | Permutation importance (MDA) |
-# | 12 | Susceptibility map | Spatial prediction and overlay |
+# | 9 | Susceptibility map | Spatial prediction |
+# | 10 | Hold-out evaluation | ROC-AUC, recall@top%, score distributions |
+# | 11 | Threshold decisions | Percentile-based operational thresholds and classified map |
+# | 12 | Model explanation | Permutation importance (MDA) |
 #
 # **Key design choices:**
 #
@@ -1023,7 +1023,54 @@ ax.set_title(
 
 
 # %% [markdown]
-# ## 9. Hold-out evaluation
+# ## 9. Susceptibility map
+#
+# *Learning objective:* produce a spatial prediction and understand that the
+# map is a model product, not independent evidence of accuracy.
+#
+# The map uses `rf_model` (fitted on the full pre-2016 balanced pool with
+# tuned hyperparameters). Red contours overlay the 2016–2022 burned areas
+# for visual comparison, but the numeric metrics in Section 10 are the formal
+# evaluation.
+
+# %%
+grid_features = make_features(feature_table, FEATURE_COLUMNS)
+grid_scores = fire_score(rf_model, grid_features)
+
+susceptibility_grid = np.full(TEMPLATE_SHAPE, np.nan, dtype=float)
+grid_rows = feature_table["row"].to_numpy()
+grid_cols = feature_table["col"].to_numpy()
+susceptibility_grid[grid_rows, grid_cols] = grid_scores
+
+holdout_burned_overlay = test_burned_mask & valid_mask
+
+grid_score_summary = pd.Series(grid_scores).describe(percentiles=[0.1, 0.25, 0.5, 0.75, 0.9])
+display(Markdown("### Mapped susceptibility score summary"))
+display(grid_score_summary)
+
+# %%
+fig, ax = plt.subplots(figsize=(12, 5.5))
+image = ax.imshow(
+    susceptibility_grid, extent=extent, origin="upper", cmap="viridis", vmin=0, vmax=1
+)
+ax.contour(
+    holdout_burned_overlay.astype(int),
+    levels=[0.5],
+    extent=extent,
+    origin="upper",
+    colors="red",
+    linewidths=0.8,
+)
+ax.set_title("Wildfire susceptibility map", loc="left", fontweight="bold")
+ax.set_xlabel("Easting")
+ax.set_ylabel("Northing")
+ax.set_aspect("equal", adjustable="box")
+fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02, label="Susceptibility score")
+fig.tight_layout()
+
+
+# %% [markdown]
+# ## 10. Hold-out evaluation
 #
 # *Learning objective:* understand why ranking metrics (ROC-AUC, recall@top%)
 # are more appropriate than accuracy for susceptibility mapping, and why the
@@ -1196,7 +1243,7 @@ fig.tight_layout()
 
 
 # %% [markdown]
-# ## 10. Threshold decisions
+# ## 11. Threshold decisions
 #
 # *Learning objective:* understand that a threshold is a *decision rule*, not
 # a property of the model, and that percentile-based thresholds are more
@@ -1289,11 +1336,43 @@ ax.set_ylim(0, max(0.05, class_plot_df["captured_burn_share"].max() * 1.15))
 clean_axes(ax)
 fig.tight_layout()
 
+# %%
+class_grid = np.full(TEMPLATE_SHAPE, np.nan, dtype=float)
+class_values = np.where(
+    grid_scores >= high_threshold, 2.0,
+    np.where(grid_scores >= medium_threshold, 1.0, 0.0),
+)
+class_grid[grid_rows, grid_cols] = class_values
 
+fig, ax = plt.subplots(figsize=(12, 5.5))
+cmap_classes = ListedColormap(["#2563eb", "#f59e0b", "#dc2626"])
+ax.imshow(class_grid, extent=extent, origin="upper", cmap=cmap_classes, vmin=-0.5, vmax=2.5)
+ax.contour(
+    holdout_burned_overlay.astype(int),
+    levels=[0.5],
+    extent=extent,
+    origin="upper",
+    colors="black",
+    linewidths=0.8,
+)
+ax.set_title("Susceptibility class map", loc="left", fontweight="bold")
+ax.set_xlabel("Easting")
+ax.set_ylabel("Northing")
+ax.set_aspect("equal", adjustable="box")
+ax.legend(
+    handles=[
+        Patch(facecolor="#2563eb", label="Low"),
+        Patch(facecolor="#f59e0b", label="Medium"),
+        Patch(facecolor="#dc2626", label="High"),
+    ],
+    loc="lower right",
+    frameon=False,
+)
+fig.tight_layout()
 
 
 # %% [markdown]
-# ## 11. Model explanation
+# ## 12. Model explanation
 #
 # *Learning objective:* understand permutation importance (MDA = Mean Decrease
 # in Accuracy) as a model-specific explanation tool, and distinguish it from
@@ -1363,55 +1442,6 @@ fig.tight_layout()
 # (northness), elevation, and slope. This is consistent with the exploratory
 # analysis: vegetation class and south-facing exposure produce the clearest
 # separation between burned and unburned samples in this Ligurian study area.
-
-
-# %% [markdown]
-# ## 12. Susceptibility map
-#
-# *Learning objective:* produce a spatial prediction and understand that the
-# map is a model product, not independent evidence of accuracy.
-#
-# The map uses `rf_model` (fitted on the full pre-2016 balanced pool with
-# tuned hyperparameters). Red contours overlay the 2016–2022 burned areas
-# for visual comparison, but the numeric metrics in Section 9 are the formal
-# evaluation.
-
-# %%
-grid_features = make_features(feature_table, FEATURE_COLUMNS)
-grid_scores = fire_score(rf_model, grid_features)
-
-susceptibility_grid = np.full(TEMPLATE_SHAPE, np.nan, dtype=float)
-grid_rows = feature_table["row"].to_numpy()
-grid_cols = feature_table["col"].to_numpy()
-susceptibility_grid[grid_rows, grid_cols] = grid_scores
-
-grid_score_summary = pd.Series(grid_scores).describe(percentiles=[0.1, 0.25, 0.5, 0.75, 0.9])
-display(Markdown("### Mapped susceptibility score summary"))
-display(grid_score_summary)
-
-# %%
-fig, ax = plt.subplots(figsize=(12, 5.5))
-image = ax.imshow(
-    susceptibility_grid, extent=extent, origin="upper", cmap="viridis", vmin=0, vmax=1
-)
-
-# Overlay: true 2016–2022 burned areas (visual comparison only).
-holdout_burned_overlay = test_burned_mask & valid_mask
-ax.contour(
-    holdout_burned_overlay.astype(int),
-    levels=[0.5],
-    extent=extent,
-    origin="upper",
-    colors="red",
-    linewidths=0.8,
-)
-
-ax.set_title("Wildfire susceptibility map", loc="left", fontweight="bold")
-ax.set_xlabel("Easting")
-ax.set_ylabel("Northing")
-ax.set_aspect("equal", adjustable="box")
-fig.colorbar(image, ax=ax, fraction=0.035, pad=0.02, label="Susceptibility score")
-fig.tight_layout()
 
 
 # %% [markdown]
