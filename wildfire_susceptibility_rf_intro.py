@@ -1022,6 +1022,19 @@ ax.set_title(
 )
 
 
+# %%
+def fire_score(model, X):
+    """Return the model's susceptibility score (probability of class 1).
+
+    Random Forest predict_proba returns [P(class=0), P(class=1)].
+    We verify the expected class ordering as a safety check.
+    """
+    assert list(model.classes_) == [0, 1], (
+        f"Expected classes [0, 1], got {list(model.classes_)}"
+    )
+    return model.predict_proba(X)[:, 1]
+
+
 # %% [markdown]
 # ## 9. Susceptibility map
 #
@@ -1096,18 +1109,6 @@ fig.tight_layout()
 from sklearn.metrics import roc_auc_score  # area under the ROC curve — threshold-free ranking quality
 from sklearn.metrics import recall_score   # fraction of positives correctly retrieved at a threshold
 from sklearn.metrics import RocCurveDisplay  # plot the ROC curve from an estimator or raw predictions
-
-
-def fire_score(model, X):
-    """Return the model's susceptibility score (probability of class 1).
-
-    Random Forest predict_proba returns [P(class=0), P(class=1)].
-    We verify the expected class ordering as a safety check.
-    """
-    assert list(model.classes_) == [0, 1], (
-        f"Expected classes [0, 1], got {list(model.classes_)}"
-    )
-    return model.predict_proba(X)[:, 1]
 
 
 # Score the validation set (with the model that never saw validation rows).
