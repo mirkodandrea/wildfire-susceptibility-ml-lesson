@@ -116,33 +116,6 @@ Or execute the script-style notebook from the command line:
 uv run python wildfire_susceptibility_rf_intro.py
 ```
 
-To rebuild the executed notebook, HTML export, and PDF export locally:
-
-```bash
-scripts/render_ipynb_html.sh
-```
-
-To rebuild only the executed notebook and PDF export locally:
-
-```bash
-scripts/render_ipynb_pdf.sh
-```
-
-## Publishing
-
-To rebuild the notebook, execute it so outputs are stored, export HTML, commit,
-and push:
-
-```bash
-scripts/deploy_lesson.sh
-```
-
-You can pass a custom commit message:
-
-```bash
-scripts/deploy_lesson.sh "Update executed lesson outputs"
-```
-
 ## Data
 
 The prepared `data/` directory contains:
