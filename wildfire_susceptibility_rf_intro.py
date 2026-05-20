@@ -56,8 +56,25 @@ if not setup_path.exists():
         setup_path,
     )
 
-from lesson_setup import *  # noqa: F403
-import rasterio
+import lesson_setup  # installs packages and clones the data repo when running in Google Colab  # noqa: F401
+
+# --- core scientific Python stack ---
+import numpy as np               # numerical arrays and math
+import pandas as pd              # tabular data — DataFrames and Series
+import matplotlib.pyplot as plt  # plotting
+
+import rasterio  # read and write GeoTIFF and other geospatial raster formats
+
+# --- notebook display helpers ---
+from IPython.display import display, Markdown  # render formatted output in the notebook
+
+# --- matplotlib colour utilities (used in the vegetation raster map) ---
+from matplotlib.colors import BoundaryNorm, ListedColormap  # colour scales for categorical rasters
+from matplotlib.patches import Patch                         # custom legend handles
+
+plt.style.use("seaborn-v0_8-whitegrid")
+pd.set_option("display.max_columns", 100)
+pd.set_option("display.width", 140)
 
 RANDOM_STATE = 42
 HOLDOUT_START_YEAR = 2016
@@ -317,11 +334,12 @@ fig.tight_layout()
 # ### Define the temporal split
 
 # %%
+
 train_years = [year for year in fire_years if year < HOLDOUT_START_YEAR]
 test_years = [year for year in fire_years if year >= HOLDOUT_START_YEAR]
 
-train_burned_mask = combined_fire_mask(fire_masks, train_years)
-test_burned_mask = combined_fire_mask(fire_masks, test_years)
+train_burned_mask = np.logical_or.reduce([fire_masks[year] for year in train_years])
+test_burned_mask = np.logical_or.reduce([fire_masks[year] for year in test_years])
 
 temporal_split_df = pd.DataFrame(
     [
@@ -450,6 +468,36 @@ def make_features(frame, feature_columns=None):
 # This table is built once and then joined with period-specific labels.
 
 # %%
+def pixel_frame(
+    rows,
+    cols,
+    target,
+    sample_type,
+    template_transform,
+    raster_arrays,
+    features,
+):
+    """Convert raster row/column indices into a tabular pixel dataset."""
+    rows = np.asarray(rows, dtype=int)
+    cols = np.asarray(cols, dtype=int)
+
+    frame = pd.DataFrame(
+        {
+            "target": int(target),
+            "sample_type": sample_type,
+            "row": rows,
+            "col": cols,
+            "x": template_transform.c + (cols + 0.5) * template_transform.a,
+            "y": template_transform.f + (rows + 0.5) * template_transform.e,
+        }
+    )
+
+    for feature in features:
+        values = raster_arrays[feature][rows, cols]
+        frame[feature] = values.astype(int) if feature == "vegetation" else values
+
+    return frame
+
 rows, cols = np.where(valid_mask)
 feature_table = pixel_frame(
     rows,
@@ -663,6 +711,8 @@ test_df = add_period_labels(
 # > spatial blocks or a spatial cross-validation strategy.
 
 # %%
+from sklearn.model_selection import train_test_split  # randomly split rows into train and validation subsets
+
 train_model_df, validation_df = train_test_split(
     train_pool_df,
     test_size=0.2,
@@ -800,6 +850,10 @@ display(list(FEATURE_COLUMNS))
 # classification threshold (we deal with thresholds later in Section 10).
 
 # %%
+from sklearn.model_selection import GridSearchCV    # exhaustive search over a hyperparameter grid
+from sklearn.model_selection import PredefinedSplit  # use a fixed validation fold instead of k-fold CV
+from sklearn.ensemble import RandomForestClassifier  # ensemble of decision trees trained by bagging
+
 param_grid = {
     "n_estimators": [150, 300],
     "max_features": ["sqrt", 0.5],
@@ -887,6 +941,54 @@ display(rf_model)
 
 
 # %% [markdown]
+# ### A single tree from the forest
+#
+# A Random Forest is an ensemble of many individual decision trees. To build
+# intuition for what the model has learned, we visualise one tree extracted
+# from the fitted forest.
+#
+# Each **node** tests a single feature threshold:
+# - The left branch is taken when the condition is **True** (≤ threshold).
+# - The right branch is taken when the condition is **False** (> threshold).
+#
+# Each **leaf** shows the majority class and the sample counts that ended up
+# there during training. The leaf colour reflects the dominant class:
+# orange-tinted = mostly burned, blue-tinted = mostly unburned.
+#
+# A single tree can be quite deep and complex, so we cap the display at
+# `max_depth=3` (the first three levels). This is enough to see the logic
+# without an unreadable diagram. Vegetation one-hot columns appear as
+# "vegetation_XXXX"; continuous predictors appear by name.
+#
+# > ⚠️ **One tree ≠ the ensemble.** This tree was built on a bootstrap sample
+# > of the training data and uses a random subset of features at each split.
+# > The ensemble averages over hundreds of such trees — each slightly different
+# > — which is what gives the Random Forest its robustness.
+
+# %%
+from sklearn.tree import plot_tree  # render a single decision tree as a diagram
+
+fig, ax = plt.subplots(figsize=(20, 7), constrained_layout=True)
+plot_tree(
+    rf_model.estimators_[0],
+    feature_names=list(FEATURE_COLUMNS),
+    class_names=["unburned", "burned"],
+    max_depth=3,
+    filled=True,
+    impurity=False,
+    proportion=True,
+    rounded=True,
+    fontsize=9,
+    ax=ax,
+)
+ax.set_title(
+    "Single decision tree (tree #0, depth capped at 3) — one member of the Random Forest",
+    loc="left",
+    fontweight="bold",
+)
+
+
+# %% [markdown]
 # ## 9. Hold-out evaluation
 #
 # *Learning objective:* understand why ranking metrics (ROC-AUC, recall@top%)
@@ -910,6 +1012,12 @@ display(rf_model)
 # > scores strictly as a *ranking*, not as an estimate of P(fire).
 
 # %%
+from sklearn.metrics import roc_auc_score           # area under the ROC curve — threshold-free ranking quality
+from sklearn.metrics import recall_score            # fraction of positives correctly retrieved at a threshold
+from sklearn.metrics import RocCurveDisplay         # plot the ROC curve from an estimator or raw predictions
+from sklearn.metrics import ConfusionMatrixDisplay  # plot the confusion matrix
+
+
 def fire_score(model, X):
     """Return the model's susceptibility score (probability of class 1).
 
@@ -1246,6 +1354,9 @@ display(balanced_metrics_df)
 # >   zone, and geography — permutation importance cannot separate these.
 
 # %%
+from sklearn.inspection import permutation_importance  # measure each feature's contribution by shuffling it
+
+
 def raw_feature_auc(model, raw_X, y):
     """Custom scorer: encode raw features, then compute ROC-AUC."""
     encoded_X = make_features(raw_X, FEATURE_COLUMNS)

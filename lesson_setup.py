@@ -1,4 +1,9 @@
-"""Runtime setup and shared imports for the wildfire susceptibility lesson."""
+"""Runtime setup for the wildfire susceptibility lesson (Colab-specific).
+
+Importing this module runs prepare_colab_runtime(), which installs packages
+and clones the data repository when the notebook is executed in Google Colab.
+Outside Colab, the import is a no-op.
+"""
 
 from __future__ import annotations
 
@@ -52,57 +57,3 @@ def prepare_colab_runtime() -> None:
 
 
 prepare_colab_runtime()
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import rasterio
-from IPython.display import Markdown, display
-from matplotlib.colors import BoundaryNorm, ListedColormap
-from matplotlib.patches import Patch
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.inspection import permutation_importance
-from sklearn.metrics import (
-    ConfusionMatrixDisplay,
-    RocCurveDisplay,
-    recall_score,
-    roc_auc_score,
-)
-from sklearn.model_selection import GridSearchCV, PredefinedSplit, train_test_split
-
-from utils import (
-    combined_fire_mask,
-    full_period_table,
-    pixel_frame,
-    sampled_period_table,
-)
-
-plt.style.use("seaborn-v0_8-whitegrid")
-pd.set_option("display.max_columns", 100)
-pd.set_option("display.width", 140)
-
-__all__ = [
-    "Path",
-    "plt",
-    "np",
-    "pd",
-    "rasterio",
-    "Markdown",
-    "display",
-    "BoundaryNorm",
-    "ListedColormap",
-    "Patch",
-    "RandomForestClassifier",
-    "permutation_importance",
-    "ConfusionMatrixDisplay",
-    "RocCurveDisplay",
-    "recall_score",
-    "roc_auc_score",
-    "GridSearchCV",
-    "PredefinedSplit",
-    "train_test_split",
-    "combined_fire_mask",
-    "full_period_table",
-    "pixel_frame",
-    "sampled_period_table",
-]
