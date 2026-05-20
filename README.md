@@ -1,4 +1,5 @@
-# Machine Learning for PhDs: Wildfire Susceptibility
+# Machine Learning & Deep Learning applications for environmental analysis and modeling 
+## Module 1: Wildfire susceptibility using Random Forest 
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/mirkodandrea/wildfire-susceptibility-ml-lesson/blob/main/wildfire_susceptibility_rf_intro.ipynb)
 
