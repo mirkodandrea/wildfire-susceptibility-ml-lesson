@@ -42,7 +42,6 @@
 #
 # This cell loads the lesson setup script. In Colab it downloads the script
 # from GitHub; the script then installs dependencies and clones the data.
-# # Features as they appear in the raw rasters.
  
 
 # %%
