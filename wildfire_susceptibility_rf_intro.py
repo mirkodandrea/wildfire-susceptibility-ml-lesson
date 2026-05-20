@@ -534,6 +534,20 @@ feature_table = feature_table.drop(columns=["target", "sample_type"])
 display(Markdown("### Feature table (first rows)"))
 display(feature_table.head())
 
+# %%
+_sample = feature_table.head()
+_before = _sample[["aspect", "vegetation"]].copy()
+_before["vegetation"] = _before["vegetation"].astype(int)
+
+_after = make_features(_sample)[
+    ["aspect_eastness", "aspect_northness"] + VEGETATION_FEATURE_COLUMNS
+]
+
+display(Markdown("### Feature engineering: before"))
+display(_before)
+display(Markdown("### Feature engineering: after"))
+display(_after)
+
 
 # %% [markdown]
 # ## 5. Training set construction
