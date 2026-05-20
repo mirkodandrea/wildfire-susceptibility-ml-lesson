@@ -217,6 +217,27 @@ valid_pixel_count = int(valid_mask.sum())
 display(Markdown("### Valid analysis pixels"))
 display(valid_pixel_count)
 
+# %%
+fig, axes = plt.subplots(1, 2, figsize=(14, 4.5), constrained_layout=True)
+
+for ax, mask, title in [
+    (axes[0], analysis_mask, "Vegetation mask (non-zero vegetation codes)"),
+    (axes[1], valid_mask, "Analysis mask (all predictors valid)"),
+]:
+    ax.imshow(
+        mask.astype(float),
+        extent=extent,
+        origin="upper",
+        cmap="Greens",
+        vmin=0,
+        vmax=1,
+    )
+    ax.set_title(title, loc="left", fontweight="bold")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+fig.suptitle("Analysis masks", x=0.01, ha="left", fontweight="bold")
+
 
 # %% [markdown]
 # ### Predictor maps
